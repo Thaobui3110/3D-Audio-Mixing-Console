@@ -1,0 +1,23 @@
+// Assets/Audio/ChucK/PianoSynth.ck
+
+// Piano synthesis engine
+Rhodey piano => NRev reverb => dac;
+0.05 => reverb.mix;
+
+// Global variables
+60 => int midiNote;
+
+// Event listener
+fun void noteOnListener() {
+    while (true) {
+        noteOn => now;
+        Std.mtof(midiNote) => piano.freq;
+        0.8 => piano.noteOn;
+    }
+}
+spork ~ noteOnListener();
+
+// Keep ChucK running
+while (true) {
+    1::second => now;
+}
