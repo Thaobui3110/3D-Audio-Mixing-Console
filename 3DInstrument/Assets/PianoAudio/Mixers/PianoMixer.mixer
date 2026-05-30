@@ -115,6 +115,26 @@ AudioMixerGroupController:
   m_Mute: 0
   m_Solo: 0
   m_BypassEffects: 0
+--- !u!244 &-1203502479075272703
+AudioMixerEffectController:
+  m_ObjectHideFlags: 3
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: 
+  m_EffectID: 79e5219639f6f7040a358fb4ebbb5197
+  m_EffectName: ParamEQ
+  m_MixLevel: a06bb72bee96d964185339df5c7a9636
+  m_Parameters:
+  - m_ParameterName: Center freq
+    m_GUID: eb37feb76b01bdb4d918e5150fafa88b
+  - m_ParameterName: Octave range
+    m_GUID: 931eba140b5099b4ab959eb1fc4eb308
+  - m_ParameterName: Frequency gain
+    m_GUID: 7ecb2bdeb856a054ead2b5424e739a89
+  m_SendTarget: {fileID: 0}
+  m_EnableWetMix: 0
+  m_Bypass: 0
 --- !u!243 &-595822342109486788
 AudioMixerGroupController:
   m_ObjectHideFlags: 0
@@ -158,8 +178,16 @@ AudioMixerController:
     name: ReverbWet
   - guid: a1bed93d754391040841fd4f9a6498c9
     name: ReverbDecayTime
+  - guid: 7e76bca6d303a994d863d5fb65f4be96
+    name: CompThreshold
+  - guid: c47913f92d97a60468767550950bbadc
+    name: CompMakeupGain
+  - guid: 369ffcb1b61ef574f96a64ff0fd29e8d
+    name: HighPassCutoff
   - guid: 5fecf6ab9f084144abb91d6f5ee2d47d
     name: LowPassCutoff
+  - guid: 7ecb2bdeb856a054ead2b5424e739a89
+    name: MidEQGain
   m_AudioMixerGroupViews:
   - guids:
     - 7cfae8f9ffb6cd04d921983aab5f65de
@@ -216,6 +244,7 @@ AudioMixerSnapshotController:
     d11437a08aaa0db429c3110a57f53862: 1
     2b7893b4e31e2f549ad5f9c1401140c5: -10000
     7e76bca6d303a994d863d5fb65f4be96: 0
+    eb37feb76b01bdb4d918e5150fafa88b: 1000
     52a0020bff749884e9305a8d7f99875e: 20
     5fecf6ab9f084144abb91d6f5ee2d47d: 1340
     73ee764d783971245a9accdccae4bf62: -0.6
@@ -240,6 +269,8 @@ AudioMixerGroupController:
   - {fileID: -6928171049294405498}
   - {fileID: -3107326579430524456}
   - {fileID: -5821885824102526536}
+  - {fileID: 8409811075922722487}
+  - {fileID: -1203502479075272703}
   m_UserColorIndex: 0
   m_Mute: 0
   m_Solo: 0
@@ -317,6 +348,24 @@ AudioMixerEffectController:
     m_GUID: 574cdba3b4ba4c84eb1bd2687cca99fd
   - m_ParameterName: Frequency gain
     m_GUID: f8b2b9b1a7751a848adc54e5c82497ab
+  m_SendTarget: {fileID: 0}
+  m_EnableWetMix: 0
+  m_Bypass: 0
+--- !u!244 &8409811075922722487
+AudioMixerEffectController:
+  m_ObjectHideFlags: 3
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: 
+  m_EffectID: 358a5137d1cc061459f5acaf30ed2aec
+  m_EffectName: Highpass
+  m_MixLevel: 94d46fa850cb78c4e89d66d16985aa40
+  m_Parameters:
+  - m_ParameterName: Cutoff freq
+    m_GUID: 369ffcb1b61ef574f96a64ff0fd29e8d
+  - m_ParameterName: Resonance
+    m_GUID: e707c64bb230de341a4c72f826de65dc
   m_SendTarget: {fileID: 0}
   m_EnableWetMix: 0
   m_Bypass: 0

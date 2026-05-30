@@ -1,11 +1,9 @@
 fileFormatVersion: 2
-guid: 0377f36b4de7fd843bc960986f6ce1f8
+guid: 2ddf8b6e86b5c5847b55e2928bdc1354
 MonoImporter:
   externalObjects: {}
   serializedVersion: 2
-  defaultReferences:
-  - pianoMixer: {fileID: 24100000, guid: b6e15c26db1c3744aa83143b28e56ac8, type: 2}
-  - chuckInstance: {instanceID: 0}
+  defaultReferences: []
   executionOrder: 0
   icon: {instanceID: 0}
   userData: 

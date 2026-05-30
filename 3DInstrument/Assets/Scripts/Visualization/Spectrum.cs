@@ -1,32 +1,31 @@
 using UnityEngine;
 
 /// <summary>
-/// Hiển thị phổ tần số (spectrum) dưới dạng 512 khối 3D.
-/// Gradient màu: đỏ (bass) → xanh lá (mid) → tím (treble).
-/// Thêm peak hold: mỗi bin giữ đỉnh trong vài giây trước khi rơi.
+/// Hiển thị phổ tần số dưới dạng N khối 3D.
+/// Đọc data từ SpectrumAnalyzer.Instance (Unity native, không cần Chunity).
 ///
-/// Inspector:
-///   - Kéo Cube prefab vào the_pfCube
-///   - Chỉnh scaleMultiplier để thay đổi chiều cao tổng thể
-///   - logScale = true: scale theo log (giống analyzer thực tế)
+/// HIERARCHY:
+///   Systems → SpectrumVisualizer → Spectrum (component này)
+///   (spawn N bin_ objects lúc runtime)
 /// </summary>
 public class Spectrum : MonoBehaviour
 {
     [Header("Prefab")]
-    public GameObject the_pfCube;
+    [SerializeField] public GameObject the_pfCube;
 
-    [Header("Scale")]
-    public float scaleMultiplier = 600f;
-    public bool  logScale        = true;
+    [Header("Display")]
+    [SerializeField, Range(32, 512)] private int binCount = 256;
+    [SerializeField] private float scaleMultiplier = 300f;
+    [SerializeField] private bool  logScale        = true;
 
     [Header("Peak Hold")]
-    public float peakHoldTime   = 1.2f;  // giây giữ đỉnh
-    public float peakFallSpeed  = 80f;   // units/s rơi xuống
+    [SerializeField] private float peakHoldTime  = 1.0f;
+    [SerializeField] private float peakFallSpeed = 60f;
 
     [Header("Colors")]
-    public Color bassColor    = new Color(1f, 0.2f, 0.1f);    // đỏ
-    public Color midColor     = new Color(0.2f, 1f, 0.3f);    // xanh lá
-    public Color trebleColor  = new Color(0.5f, 0.3f, 1f);    // tím
+    [SerializeField] private Color bassColor   = new Color(1f, 0.2f, 0.1f);
+    [SerializeField] private Color midColor    = new Color(0.2f, 1f, 0.3f);
+    [SerializeField] private Color trebleColor = new Color(0.5f, 0.3f, 1f);
 
     // ── Private ────────────────────────────────────────────────────────────
     private Transform[]           cubeTransforms;
@@ -34,25 +33,27 @@ public class Spectrum : MonoBehaviour
     private MaterialPropertyBlock propBlock;
     private float[]               peakValues;
     private float[]               peakTimers;
-    private const int             COUNT = 512;
+    private static readonly int   BaseColorID = Shader.PropertyToID("_BaseColor");
+    private const float           MinHeight   = 0.01f;
+    private const float           BinWidth    = 2f;
 
     private void Start()
     {
-        cubeTransforms = new Transform[COUNT];
-        cubeRenderers  = new Renderer[COUNT];
-        peakValues     = new float[COUNT];
-        peakTimers     = new float[COUNT];
+        if (the_pfCube == null) { Debug.LogError("[Spectrum] the_pfCube chưa gán!", this); enabled = false; return; }
+
+        cubeTransforms = new Transform[binCount];
+        cubeRenderers  = new Renderer[binCount];
+        peakValues     = new float[binCount];
+        peakTimers     = new float[binCount];
         propBlock      = new MaterialPropertyBlock();
 
-        float xStart = -(COUNT * 1f);  // 2 units per bin
-
-        for (int i = 0; i < COUNT; i++)
+        float xStart = -(binCount * BinWidth * 0.5f);
+        for (int i = 0; i < binCount; i++)
         {
             var go = Instantiate(the_pfCube, transform);
             go.name = "bin_" + i;
-            go.transform.localPosition = new Vector3(xStart + i * 2f, 0f, 0f);
-            go.transform.localScale    = new Vector3(2f, 0.01f, 1f);
-
+            go.transform.localPosition = new Vector3(xStart + i * BinWidth, 0f, 0f);
+            go.transform.localScale    = new Vector3(BinWidth * 0.85f, MinHeight, 1f);
             cubeTransforms[i] = go.transform;
             cubeRenderers[i]  = go.GetComponent<Renderer>();
         }
@@ -62,23 +63,21 @@ public class Spectrum : MonoBehaviour
 
     private void Update()
     {
-        float[] spectrum = ChunityAudioInput.the_spectrum;
-        float   dt       = Time.deltaTime;
+        if (SpectrumAnalyzer.Instance == null) return;
 
-        for (int i = 0; i < COUNT; i++)
+        float[] data  = SpectrumAnalyzer.Instance.SpectrumData;
+        int     count = Mathf.Min(binCount, data.Length);
+        float   dt    = Time.deltaTime;
+
+        for (int i = 0; i < count; i++)
         {
-            float raw = spectrum[i];
-            float h   = logScale
-                ? scaleMultiplier * Mathf.Log10(1f + raw * 9f)   // log scale
-                : scaleMultiplier * Mathf.Sqrt(raw);               // sqrt (code cũ)
-            h = Mathf.Max(h, 0.01f);
+            float h = logScale
+                ? scaleMultiplier * Mathf.Log10(1f + data[i] * 9f)
+                : scaleMultiplier * Mathf.Sqrt(data[i]);
+            h = Mathf.Max(h, MinHeight);
 
             // Peak hold
-            if (h >= peakValues[i])
-            {
-                peakValues[i] = h;
-                peakTimers[i] = peakHoldTime;
-            }
+            if (h >= peakValues[i])  { peakValues[i] = h; peakTimers[i] = peakHoldTime; }
             else
             {
                 peakTimers[i] -= dt;
@@ -87,19 +86,19 @@ public class Spectrum : MonoBehaviour
             }
 
             // Transform
-            var s = cubeTransforms[i].localScale;
-            cubeTransforms[i].localScale    = new Vector3(s.x, h, s.z);
-            var p = cubeTransforms[i].localPosition;
-            cubeTransforms[i].localPosition = new Vector3(p.x, h * 0.5f, p.z);
+            var scale = cubeTransforms[i].localScale;
+            cubeTransforms[i].localScale    = new Vector3(scale.x, h, scale.z);
+            var pos = cubeTransforms[i].localPosition;
+            cubeTransforms[i].localPosition = new Vector3(pos.x, h * 0.5f, pos.z);
 
-            // Gradient màu theo bin index (bass → mid → treble)
-            float t = (float)i / COUNT;
+            // Color gradient
+            float t = (float)i / count;
             Color c = t < 0.5f
                 ? Color.Lerp(bassColor, midColor,    t * 2f)
                 : Color.Lerp(midColor,  trebleColor, (t - 0.5f) * 2f);
 
             cubeRenderers[i].GetPropertyBlock(propBlock);
-            propBlock.SetColor("_BaseColor", c);
+            propBlock.SetColor(BaseColorID, c);
             cubeRenderers[i].SetPropertyBlock(propBlock);
         }
     }

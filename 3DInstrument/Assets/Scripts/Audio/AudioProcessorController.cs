@@ -1,145 +1,157 @@
 using UnityEngine;
 using UnityEngine.Audio;
 
+/// <summary>
+/// Điều khiển tất cả DSP parameters trên AudioMixer.
+///
+/// HIERARCHY:
+///   Systems → AudioManager → AudioProcessorController (component này)
+///
+/// ── AudioMixer Setup (Music group, theo thứ tự từ trên xuống) ──
+///
+///   Effect              │ Expose parameter     │ Tên expose
+///   ────────────────────┼──────────────────────┼─────────────────
+///   Highpass            │ Cutoff freq          │ HighPassCutoff
+///   Lowpass             │ Cutoff freq          │ LowPassCutoff
+///   ParamEQ (Mid)       │ Gain                 │ MidEQGain
+///   SFX Reverb          │ Room (wet)           │ ReverbWet
+///                       │ Decay Time           │ ReverbDecayTime
+///   Compressor          │ Threshold            │ CompThreshold
+///                       │ Ratio                │ CompRatio
+///   Attenuation (Master)│ Volume               │ MasterVolume
+///
+/// ParamEQ (Mid): đặt Center Freq ~1000 Hz, Bandwidth ~1.0 trong Inspector.
+/// Chỉ expose Gain — đây là dải mid boost/cut duy nhất.
+/// </summary>
+[DisallowMultipleComponent]
 public class AudioProcessorController : MonoBehaviour
 {
-    [Header("Audio Mixer Assignment")]
-    [SerializeField] private AudioMixer pianoMixer;
+    // ── Inspector ──────────────────────────────────────────────────────────
+    [Header("Mixer")]
+    [SerializeField] private AudioMixer mixer;
 
-    [Header("Exposed Parameter Names — phải khớp chính xác tên trong AudioMixer window")]
-    [SerializeField] private string masterVolumeParam  = "MasterVolume";
-    [SerializeField] private string lowPassCutoffParam = "LowPassCutoff";
-    [SerializeField] private string reverbWetParam     = "ReverbWet";
-    [SerializeField] private string reverbDecayParam   = "ReverbDecayTime";
-    [SerializeField] private string compThresholdParam = "CompThreshold";
-    [SerializeField] private string compRatioParam     = "CompRatio";
+    [Header("Exposed Parameter Names — phải khớp tên trong AudioMixer")]
+    [SerializeField] private string pMasterVolume  = "MasterVolume";
+    [SerializeField] private string pLowPassCutoff = "LowPassCutoff";
+    [SerializeField] private string pHighPassCutoff= "HighPassCutoff";
+    [SerializeField] private string pMidEQGain     = "MidEQGain";
+    [SerializeField] private string pReverbWet     = "ReverbWet";
+    [SerializeField] private string pReverbDecay   = "ReverbDecayTime";
+    [SerializeField] private string pCompThreshold = "CompThreshold";
+    [SerializeField] private string pCompMakeupGain = "CompMakeupGain";
 
-    [Header("EQ Band Params (để trống nếu dùng ChucK)")]
-    [SerializeField] private string lowShelfGainParam  = "";
-    [SerializeField] private string midPeakGainParam   = "";
-    [SerializeField] private string highShelfGainParam = "";
+    // ── Cached defaults ────────────────────────────────────────────────────
+    private float _masterVol   = 1f;
+    private float _lowPass     = 22000f;
+    private float _highPass    = 20f;
+    private float _midEQGain   = 0f;
+    private float _reverbWet   = 0f;
+    private float _reverbDecay = 1f;
+    private float _compThresh  = 0f;
+    private float _compMakeupGain = 0f;
 
-    // FIX: Chuck.Main không tồn tại trong Chunity API.
-    // Đúng cách là kéo ChuckSubInstance (hoặc ChuckMainInstance) từ scene vào đây.
-    // ChuckSubInstance là component gắn trên GameObject có PianoSynth.ck chạy.
-    // ChuckMainInstance dùng khi chỉ có một instance ChucK duy nhất trong scene.
-    [Header("ChucK Instance — kéo GameObject có ChuckSubInstance vào đây")]
-    [SerializeField] private ChuckSubInstance chuckInstance;
-
+    // ── Lifecycle ──────────────────────────────────────────────────────────
     private void Awake()
     {
-        if (pianoMixer == null)
-            Debug.LogError($"[{gameObject.name}] Piano Mixer chưa được gán trong Inspector!");
-
-        if (chuckInstance == null)
-            Debug.LogWarning($"[{gameObject.name}] ChucK Instance chưa được gán — 3 band EQ sẽ không hoạt động.");
+        if (mixer == null)
+            Debug.LogError("[AudioProcessorController] mixer chưa gán!", this);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Master Volume
-    // ─────────────────────────────────────────────────────────────────────
+    private void Start() => ApplyAllDefaults();
 
-    public void SetMasterVolume(float linearValue)
+    // ── Public API ─────────────────────────────────────────────────────────
+
+    /// <param name="linear">0–1</param>
+    public void SetMasterVolume(float linear)
     {
-        float dB = linearValue > 0.0001f ? Mathf.Log10(linearValue) * 20f : -80f;
-        SetMixerParam(masterVolumeParam, dB);
+        _masterVol = Mathf.Clamp01(linear);
+        Set(pMasterVolume, ToDecibel(_masterVol));
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // EQ
-    // ─────────────────────────────────────────────────────────────────────
-
-    public void SetLowPassCutoff(float frequency)
+    /// <param name="hz">200–22000 Hz — cắt tần số cao hơn giá trị này</param>
+    public void SetLowPassCutoff(float hz)
     {
-        SetMixerParam(lowPassCutoffParam, frequency);
+        _lowPass = Mathf.Clamp(hz, 200f, 22000f);
+        Set(pLowPassCutoff, _lowPass);
     }
 
-    public void SetLowShelfGain(float gain)
+    /// <param name="hz">20–2000 Hz — cắt tần số thấp hơn giá trị này</param>
+    public void SetHighPassCutoff(float hz)
     {
-        if (!string.IsNullOrEmpty(lowShelfGainParam))
-            SetMixerParam(lowShelfGainParam, gain);
-
-        // Gửi sang ChucK — khớp với "global float unity_LowShelfGain" trong PianoSynth.ck.txt
-        SetChuckFloat("unity_LowShelfGain", gain);
+        _highPass = Mathf.Clamp(hz, 20f, 2000f);
+        Set(pHighPassCutoff, _highPass);
     }
 
-    public void SetMidPeakGain(float gain)
+    /// <param name="dB">-12 đến +12 dB — boost/cut dải mid (~1 kHz)</param>
+    public void SetMidEQGain(float dB)
     {
-        if (!string.IsNullOrEmpty(midPeakGainParam))
-            SetMixerParam(midPeakGainParam, gain);
-
-        SetChuckFloat("unity_MidPeakGain", gain);
+        _midEQGain = Mathf.Clamp(dB, -12f, 12f);
+        Set(pMidEQGain, _midEQGain);
     }
 
-    public void SetLowPass(float value)
+    /// <param name="linear">0–1</param>
+    public void SetReverbWet(float linear)
     {
-        Debug.Log("Slider: " + value);
-
-        bool ok =
-            pianoMixer.SetFloat("LowPassCutoff", value);
-
-        Debug.Log("SetFloat: " + ok);
+        _reverbWet = Mathf.Clamp01(linear);
+        Set(pReverbWet, ToDecibel(_reverbWet));
     }
 
-    public void SetHighShelfGain(float gain)
+    /// <param name="seconds">0.1–10 s</param>
+    public void SetReverbDecay(float seconds)
     {
-        if (!string.IsNullOrEmpty(highShelfGainParam))
-            SetMixerParam(highShelfGainParam, gain);
-
-        SetChuckFloat("unity_HighShelfGain", gain);
+        _reverbDecay = Mathf.Clamp(seconds, 0.1f, 10f);
+        Set(pReverbDecay, _reverbDecay);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Reverb
-    // ─────────────────────────────────────────────────────────────────────
-
-    public void SetReverbWet(float linearValue)
-    {
-        float dB = linearValue > 0.0001f ? Mathf.Log10(linearValue) * 20f : -80f;
-        SetMixerParam(reverbWetParam, dB);
-    }
-
-    public void SetReverbDecay(float decayTimeSeconds)
-    {
-        SetMixerParam(reverbDecayParam, decayTimeSeconds);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // Compressor
-    // ─────────────────────────────────────────────────────────────────────
-
+    /// <param name="dB">-60–0 dB</param>
     public void SetCompressorThreshold(float dB)
     {
-        SetMixerParam(compThresholdParam, dB);
+        _compThresh = Mathf.Clamp(dB, -60f, 0f);
+        Set(pCompThreshold, _compThresh);
     }
 
-    public void SetCompressorRatio(float ratio)
+    /// <param name="gain">0 dB</param>
+    public void SetCompressorMakeupGain(float gain)
     {
-        SetMixerParam(compRatioParam, ratio);
+        _compMakeupGain = Mathf.Clamp(gain, 0f, 20f);
+        Set(pCompMakeupGain, _compMakeupGain);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Internal helpers
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Getters ────────────────────────────────────────────────────────────
+    public float GetMasterVolume()        => _masterVol;
+    public float GetLowPassCutoff()       => _lowPass;
+    public float GetHighPassCutoff()      => _highPass;
+    public float GetMidEQGain()           => _midEQGain;
+    public float GetReverbWet()           => _reverbWet;
+    public float GetReverbDecay()         => _reverbDecay;
+    public float GetCompressorThreshold() => _compThresh;
+    public float GetCompressorMakeupGain()     => _compMakeupGain;
 
-    private void SetMixerParam(string paramName, float value)
+    // ── Private ────────────────────────────────────────────────────────────
+    private void Set(string param, float value)
     {
-        if (pianoMixer == null) return;
-
-        bool success = pianoMixer.SetFloat(paramName, value);
-        if (!success)
-        {
-            Debug.LogWarning(
-                $"[AudioProcessorController] Không tìm thấy exposed parameter '{paramName}' " +
-                $"trong AudioMixer '{pianoMixer.name}'. " +
-                "Kiểm tra lại tên đã Expose trong cửa sổ AudioMixer (chuột phải vào param → Expose)."
-            );
-        }
+        if (mixer == null || string.IsNullOrEmpty(param)) return;
+        if (!mixer.SetFloat(param, value))
+            Debug.LogWarning($"[AudioProcessorController] '{param}' không tìm thấy — kiểm tra tên Exposed parameter trong AudioMixer.", this);
     }
 
-    private void SetChuckFloat(string variableName, float value)
+    private static float ToDecibel(float linear)
+        => linear > 0.0001f ? Mathf.Log10(linear) * 20f : -80f;
+
+    private void ApplyAllDefaults()
     {
-        if (chuckInstance == null) return;
-        chuckInstance.SetFloat(variableName, value);
+        SetMasterVolume(_masterVol);
+        SetLowPassCutoff(_lowPass);
+        SetHighPassCutoff(_highPass);
+        SetMidEQGain(_midEQGain);
+        SetReverbWet(_reverbWet);
+        SetReverbDecay(_reverbDecay);
+        SetCompressorThreshold(_compThresh);
+        SetCompressorMakeupGain(_compMakeupGain);
     }
+
+#if UNITY_EDITOR
+    [ContextMenu("Apply Defaults to Mixer")]
+    private void EditorApplyDefaults() => ApplyAllDefaults();
+#endif
 }

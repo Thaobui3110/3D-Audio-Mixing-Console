@@ -1,46 +1,44 @@
 using UnityEngine;
 
 /// <summary>
-/// Hiển thị dạng sóng âm (waveform) dưới dạng 1024 khối 3D.
-/// Màu thay đổi theo amplitude: xanh lá (yên tĩnh) → vàng → đỏ (to).
-///
-/// Inspector:
-///   - Kéo Cube prefab vào the_pfCube
-///   - Điều chỉnh heightScale để thay đổi chiều cao
-///   - Object này tự đặt vị trí Y=100 lúc Start
+/// Hiển thị waveform dưới dạng 1024 khối 3D.
+/// Đọc data từ SpectrumAnalyzer.Instance.WaveformData.
 /// </summary>
 public class Waveform : MonoBehaviour
 {
     [Header("Prefab")]
-    public GameObject the_pfCube;
+    [SerializeField] public GameObject the_pfCube;
 
     [Header("Scale")]
-    public float heightScale = 200f;
+    [SerializeField, Range(50f, 500f)] private float heightScale = 150f;
+    [SerializeField, Range(0.5f, 3f)]  private float binWidth    = 1f;
 
     [Header("Color")]
-    public Color quietColor  = new Color(0.4f, 1f, 0.4f);   // xanh lá
-    public Color loudColor   = new Color(1f, 0.3f, 0.1f);    // đỏ cam
+    [SerializeField] private Color quietColor = new Color(0.3f, 0.9f, 0.5f);
+    [SerializeField] private Color loudColor  = new Color(1f, 0.3f, 0.1f);
 
-    // ── Private ────────────────────────────────────────────────────────────
     private Transform[]           cubeTransforms;
-    private MaterialPropertyBlock propBlock;
     private Renderer[]            cubeRenderers;
-    private const int             COUNT = 1024;
+    private MaterialPropertyBlock propBlock;
+    private static readonly int   BaseColorID = Shader.PropertyToID("_BaseColor");
+    private const float           MinHeight   = 0.01f;
+    private const int             Count       = 1024;
 
     private void Start()
     {
-        cubeTransforms = new Transform[COUNT];
-        cubeRenderers  = new Renderer[COUNT];
+        if (the_pfCube == null) { Debug.LogError("[Waveform] the_pfCube chưa gán!", this); enabled = false; return; }
+
+        cubeTransforms = new Transform[Count];
+        cubeRenderers  = new Renderer[Count];
         propBlock      = new MaterialPropertyBlock();
 
-        float xStart = -(COUNT * 0.5f);
-
-        for (int i = 0; i < COUNT; i++)
+        float xStart = -(Count * binWidth * 0.5f);
+        for (int i = 0; i < Count; i++)
         {
             var go = Instantiate(the_pfCube, transform);
             go.name = "wf_" + i;
-            go.transform.localPosition = new Vector3(xStart + i, 0f, 0f);
-
+            go.transform.localPosition = new Vector3(xStart + i * binWidth, 0f, 0f);
+            go.transform.localScale    = new Vector3(binWidth * 0.85f, MinHeight, 1f);
             cubeTransforms[i] = go.transform;
             cubeRenderers[i]  = go.GetComponent<Renderer>();
         }
@@ -50,24 +48,22 @@ public class Waveform : MonoBehaviour
 
     private void Update()
     {
-        float[] wf = ChunityAudioInput.the_waveform;
+        if (SpectrumAnalyzer.Instance == null) return;
 
-        for (int i = 0; i < COUNT; i++)
+        float[] wf = SpectrumAnalyzer.Instance.WaveformData;
+
+        for (int i = 0; i < Count; i++)
         {
-            float sample = wf[i];
-            float h      = Mathf.Abs(sample) * heightScale;
+            float h = Mathf.Max(Mathf.Abs(wf[i]) * heightScale, MinHeight);
 
+            var scale = cubeTransforms[i].localScale;
+            cubeTransforms[i].localScale    = new Vector3(scale.x, h, scale.z);
             var pos = cubeTransforms[i].localPosition;
             cubeTransforms[i].localPosition = new Vector3(pos.x, h * 0.5f, pos.z);
-            cubeTransforms[i].localScale    = new Vector3(
-                cubeTransforms[i].localScale.x, Mathf.Max(h, 0.01f),
-                cubeTransforms[i].localScale.z
-            );
 
-            // Màu theo amplitude
-            float t = Mathf.Clamp01(Mathf.Abs(sample) * 4f);
+            float t = Mathf.Clamp01(Mathf.Abs(wf[i]) * 4f);
             cubeRenderers[i].GetPropertyBlock(propBlock);
-            propBlock.SetColor("_BaseColor", Color.Lerp(quietColor, loudColor, t));
+            propBlock.SetColor(BaseColorID, Color.Lerp(quietColor, loudColor, t));
             cubeRenderers[i].SetPropertyBlock(propBlock);
         }
     }
