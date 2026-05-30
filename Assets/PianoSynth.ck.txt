@@ -1,0 +1,58 @@
+// --------------------------------------------------------
+// Mạch Định Tuyến DSP 3-Band EQ trong ChucK
+// --------------------------------------------------------
+
+// Thiết lập các bộ lọc đầu vào
+adc => LPF lowFilter => Gain lowGainNode => dac;
+adc => BPF midFilter => Gain midGainNode => dac;
+adc => HPF highFilter => Gain highGainNode => dac;
+
+// Cấu hình tần số cắt cố định cho các dải (Crossover Frequencies)
+200.0 => lowFilter.freq;    // Dưới 200Hz là Bass
+1000.0 => midFilter.freq;   // Trung tâm dải Mid là 1kHz
+2.0 => midFilter.Q;         // Độ rộng băng thông dải Trung (Quality factor)
+5000.0 => highFilter.freq;  // Trên 5kHz là Treble
+
+// Các biến lưu trữ giá trị Gain toàn cục (mặc định bằng 1.0 tức là 0 dB)
+1.0 => float lowGain;
+1.0 => float midGain;
+1.0 => float highGain;
+
+// --------------------------------------------------------
+// Lắng nghe sự kiện thay đổi từ Slider UI (Unity)
+// --------------------------------------------------------
+
+// Hàm cập nhật giá trị cho các Node Gain trong ChucK
+function void updateEQ() {
+    lowGain => lowGainNode.gain;
+    midGain => midGainNode.gain;
+    highGain => highGainNode.gain;
+}
+
+// Hàm vòng lặp kiểm tra sự kiện từ Unity gửi sang
+function void listenUnityEvents() {
+    while( true ) {
+        // Ví dụ sử dụng Chunity Named Variables để nhận giá trị trực tiếp từ C#
+        global float unity_LowShelfGain;
+        global float unity_MidPeakGain;
+        global float unity_HighShelfGain;
+        
+        // Cập nhật lại biến local trong ChucK
+        unity_LowShelfGain => lowGain;
+        unity_MidPeakGain => midGain;
+        unity_HighShelfGain => highGain;
+        
+        updateEQ();
+        
+        // Tránh nghẽn CPU, kiểm tra sau mỗi 10 mili-giây
+        10::ms => now; 
+    }
+}
+
+// Chạy trình lắng nghe sự kiện ngầm
+spork ~ listenUnityEvents();
+
+// Giữ cho file ChucK luôn hoạt động
+while( true ) {
+    1::second => now;
+}
