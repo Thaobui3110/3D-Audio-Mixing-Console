@@ -23,7 +23,7 @@ public class AudioProcessorUIBuilder : EditorWindow
         new SliderConfig { section="Reverb",     fieldSlider="sliderReverbWet",     fieldLabel="labelReverbWet",     displayName="Wet Level",      defaultText="0%",       min=0f,    max=1f,     defaultVal=0f     },
         new SliderConfig { section=null,         fieldSlider="sliderReverbDecay",   fieldLabel="labelReverbDecay",   displayName="Decay Time",     defaultText="1.00 s",   min=0.1f,  max=10f,    defaultVal=1f     },
         new SliderConfig { section="Compressor", fieldSlider="sliderCompThreshold", fieldLabel="labelCompThreshold", displayName="Threshold",      defaultText="0.0 dB",   min=-60f,  max=0f,     defaultVal=0f     },
-        new SliderConfig { section=null,         fieldSlider="sliderCompMakeUp",    fieldLabel="labelCompMakeUp",    displayName="Make Up Gain",   defaultText="0.0 dB",   min=0f,    max=20f,    defaultVal=0f     },
+        new SliderConfig { section=null,         fieldSlider="sliderCompMakeupGain",fieldLabel="labelCompMakeupGain",displayName="Make Up Gain",   defaultText="0.0 dB",   min=0f,    max=20f,    defaultVal=0f     },
         new SliderConfig { section="Master",     fieldSlider="sliderMasterVolume",  fieldLabel="labelMasterVolume",  displayName="Master Volume",  defaultText="100%",     min=0f,    max=1f,     defaultVal=1f     },
     };
 
@@ -170,44 +170,54 @@ public class AudioProcessorUIBuilder : EditorWindow
 
         MakeSectionLabel("Upload Audio", sec.transform);
 
-        // Row: InputField + Load button
+        // Row: InputField + Browse + Load buttons
         var row = MakeGO("Row_Upload", sec.transform);
         SetH(row, buttonH);
         var hlg = row.AddComponent<HorizontalLayoutGroup>();
         hlg.spacing = 6f;
         hlg.childControlHeight    = true;
-        hlg.childControlWidth     = false;
+        hlg.childControlWidth     = true;
         hlg.childForceExpandWidth = false;
 
         // InputField
         var inputGO  = MakeGO("PathInput", row.transform);
         SetH(inputGO, buttonH);
-        var inputLE  = inputGO.AddComponent<LayoutElement>();
-        inputLE.preferredWidth = panelWidth - padding * 2f - 106f;
+        var inputLE  = inputGO.GetComponent<LayoutElement>();
+        inputLE.flexibleWidth = 1f;
         inputGO.AddComponent<Image>().color = new Color(0.2f, 0.2f, 0.25f);
 
-        var textGO  = MakeGO("Text", inputGO.transform);
-        StretchRT(textGO, 6f, 2f);
+        // Text Area (viewport) — cần RectMask2D để TMP_InputField hoạt động
+        var textArea = MakeGO("Text Area", inputGO.transform);
+        StretchRT(textArea, 6f, 2f);
+        textArea.AddComponent<RectMask2D>();
+
+        var textGO  = MakeGO("Text", textArea.transform);
+        StretchRT(textGO, 0f, 0f);
         var textTMP = textGO.AddComponent<TextMeshProUGUI>();
         textTMP.fontSize  = 12f;
         textTMP.color     = Color.white;
         textTMP.alignment = TextAlignmentOptions.Left | TextAlignmentOptions.Midline;
 
-        var phGO  = MakeGO("Placeholder", inputGO.transform);
-        StretchRT(phGO, 6f, 2f);
+        var phGO  = MakeGO("Placeholder", textArea.transform);
+        StretchRT(phGO, 0f, 0f);
         var phTMP = phGO.AddComponent<TextMeshProUGUI>();
-        phTMP.text      = "Đường dẫn file .wav / .mp3 / .ogg";
+        phTMP.text      = "Nhấn Browse hoặc nhập path...";
         phTMP.fontSize  = 11f;
         phTMP.fontStyle = FontStyles.Italic;
         phTMP.color     = new Color(0.4f, 0.4f, 0.5f);
         phTMP.alignment = TextAlignmentOptions.Left | TextAlignmentOptions.Midline;
 
         var inputField           = inputGO.AddComponent<TMP_InputField>();
+        inputField.textViewport  = textArea.GetComponent<RectTransform>();
         inputField.textComponent = textTMP;
         inputField.placeholder   = phTMP;
         inputField.targetGraphic = inputGO.GetComponent<Image>();
         inputField.lineType      = TMP_InputField.LineType.SingleLine;
         SafeSet(so, "pathInputField", inputField);
+
+        // Browse button
+        var browseBtn = MakeButton("Browse", row.transform, new Color(0.35f, 0.45f, 0.65f), 70f);
+        SafeSet(so, "browseButton", browseBtn);
 
         // Load button
         var loadBtn = MakeButton("Load", row.transform, new Color(0.8f, 0.5f, 0.1f), 100f);
@@ -248,7 +258,7 @@ public class AudioProcessorUIBuilder : EditorWindow
         var hlg = btnRow.AddComponent<HorizontalLayoutGroup>();
         hlg.spacing = 6f;
         hlg.childControlHeight    = true;
-        hlg.childControlWidth     = false;
+        hlg.childControlWidth     = true;
         hlg.childForceExpandWidth = false;
 
         float bw = (panelWidth - padding * 2f - 12f) / 3f;
@@ -312,7 +322,7 @@ public class AudioProcessorUIBuilder : EditorWindow
         hlg.padding            = new RectOffset(8, 8, 0, 0);
         hlg.spacing            = 6f;
         hlg.childControlHeight = true;
-        hlg.childControlWidth  = false;
+        hlg.childControlWidth  = true;
         hlg.childForceExpandWidth = false;
 
         // Name label
@@ -448,7 +458,8 @@ public class AudioProcessorUIBuilder : EditorWindow
     {
         var go  = MakeGO("Btn_" + label, parent);
         SetH(go, buttonH);
-        go.AddComponent<LayoutElement>().preferredWidth = width;
+        var le = go.GetComponent<LayoutElement>();
+        le.preferredWidth = width;
         var img = go.AddComponent<Image>();
         img.color = color;
         var btn = go.AddComponent<Button>();

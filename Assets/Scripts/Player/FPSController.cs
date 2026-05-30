@@ -1,19 +1,21 @@
 using UnityEngine;
 
 /// <summary>
-/// FPS Controller cơ bản cho nhân vật trong scene nhạc cụ.
+/// FPS Controller cho Spatial Audio Sandbox.
+/// Người dùng di chuyển quanh AudioWorld, nghe spatial audio thay đổi realtime.
 ///
-/// HIERARCHY SETUP:
-///   Player (GameObject)                   ← FPSController + CharacterController
-///   └── Camera (GameObject)               ← Camera component + AudioListener
-///       └── InstrumentInteractor          ← raycast tương tác
+/// HIERARCHY:
+///   Player                   ← GameObject + CharacterController + FPSController
+///   └── Main Camera          ← Camera + AudioListener
+///
+/// Không còn InstrumentInteractor — tương tác đã chuyển sang UI hoàn toàn.
 ///
 /// KEYBINDS:
-///   WASD / Arrow Keys  — di chuyển
-///   Shift              — chạy
-///   Mouse              — nhìn
-///   Escape             — toggle cursor lock
-///   Tab                — Interact Mode (cursor free, camera cố định)
+///   WASD / Arrows  — di chuyển
+///   Shift          — chạy nhanh
+///   Mouse          — nhìn
+///   Escape         — unlock/lock cursor
+///   Tab            — toggle UI mode (cursor free để dùng sliders)
 /// </summary>
 [RequireComponent(typeof(CharacterController))]
 [DisallowMultipleComponent]
@@ -22,26 +24,25 @@ public class FPSController : MonoBehaviour
     // ── Inspector ──────────────────────────────────────────────────────────
     [Header("Movement")]
     [SerializeField, Range(1f, 20f)] private float moveSpeed        = 5f;
-    [SerializeField, Range(1f, 3f)]  private float sprintMultiplier = 1.5f;
+    [SerializeField, Range(1f, 3f)]  private float sprintMultiplier = 1.6f;
 
     [Header("Look")]
-    [SerializeField, Range(0.1f, 10f)] private float mouseSensitivity = 2f;
+    [SerializeField, Range(0.5f, 10f)] private float mouseSensitivity = 2f;
     [SerializeField] private bool invertY = false;
-    [SerializeField, Range(-90f, 0f)]  private float minVerticalAngle = -80f;
-    [SerializeField, Range(0f, 90f)]   private float maxVerticalAngle =  80f;
 
     [Header("Gravity")]
     [SerializeField, Range(-50f, -5f)] private float gravity = -20f;
 
     [Header("Keybinds")]
-    [SerializeField] private KeyCode unlockCursorKey    = KeyCode.Escape;
-    [SerializeField] private KeyCode toggleInteractKey  = KeyCode.Tab;
+    [SerializeField] private KeyCode unlockKey   = KeyCode.Escape;
+    [SerializeField] private KeyCode uiModeKey   = KeyCode.Tab;
 
-    // ── Public state (read bởi InstrumentInteractor) ───────────────────────
-    public bool IsInteractMode { get; private set; }
+    // ── Public state ───────────────────────────────────────────────────────
+    /// <summary>True khi cursor free để dùng UI sliders.</summary>
+    public bool IsUIMode     { get; private set; }
     public bool IsCursorLocked => cursorLocked;
 
-    // ── Private state ──────────────────────────────────────────────────────
+    // ── Private ────────────────────────────────────────────────────────────
     private CharacterController controller;
     private Camera              cam;
     private float               verticalAngle;
@@ -53,9 +54,8 @@ public class FPSController : MonoBehaviour
     {
         controller = GetComponent<CharacterController>();
         cam        = GetComponentInChildren<Camera>();
-
         if (cam == null)
-            Debug.LogError("[FPSController] Camera child không tìm thấy!", this);
+            Debug.LogError("[FPSController] Không tìm thấy Camera child!", this);
 
         SetCursorLock(true);
     }
@@ -63,31 +63,28 @@ public class FPSController : MonoBehaviour
     private void Update()
     {
         HandleCursorToggle();
-        HandleMovement();
-
-        if (!IsInteractMode)
-            HandleLook();
+        if (!IsUIMode) HandleMovement();
+        if (!IsUIMode) HandleLook();
     }
 
-    // ── Input handlers ─────────────────────────────────────────────────────
+    // ── Input ──────────────────────────────────────────────────────────────
     private void HandleCursorToggle()
     {
-        // Escape: toggle cursor lock (tạm thời)
-        if (Input.GetKeyDown(unlockCursorKey))
+        if (Input.GetKeyDown(unlockKey))
             SetCursorLock(!cursorLocked);
 
-        // Tab: Interact Mode — cursor free, camera không di chuyển
-        if (Input.GetKeyDown(toggleInteractKey))
+        // Tab = UI Mode: cursor free, camera không xoay → dùng sliders thoải mái
+        if (Input.GetKeyDown(uiModeKey))
         {
-            IsInteractMode = !IsInteractMode;
-            SetCursorLock(!IsInteractMode);
-            Debug.Log(IsInteractMode
-                ? "[FPS] Interact Mode ON — cursor free, camera locked"
-                : "[FPS] Interact Mode OFF — FPS control enabled");
+            IsUIMode = !IsUIMode;
+            SetCursorLock(!IsUIMode);
+            // Disable CharacterController khi UI mode để không block mouse events của Canvas
+            if (controller != null) controller.enabled = !IsUIMode;
         }
 
-        // Click chuột khi cursor free và không trong interact mode → lock lại
-        if (Input.GetMouseButtonDown(0) && !cursorLocked && !IsInteractMode)
+        // Click để lock lại — chỉ khi cursor free VÀ không phải UI mode
+        // Không lock khi IsUIMode vì user đang dùng chuột để kéo slider
+        if (Input.GetMouseButtonDown(0) && !cursorLocked && !IsUIMode)
             SetCursorLock(true);
     }
 
@@ -100,12 +97,11 @@ public class FPSController : MonoBehaviour
             ? moveSpeed * sprintMultiplier
             : moveSpeed;
 
-        Vector3 move = transform.right * h + transform.forward * v;
-        controller.Move(move * (speed * Time.deltaTime));
+        controller.Move((transform.right * h + transform.forward * v) * (speed * Time.deltaTime));
 
-        // Gravity với vận tốc tích lũy đúng vật lý
+        // Gravity
         if (controller.isGrounded && verticalVelocity < 0f)
-            verticalVelocity = -2f; // nhỏ âm để duy trì isGrounded chính xác
+            verticalVelocity = -2f;
 
         verticalVelocity += gravity * Time.deltaTime;
         controller.Move(new Vector3(0f, verticalVelocity * Time.deltaTime, 0f));
@@ -115,21 +111,18 @@ public class FPSController : MonoBehaviour
     {
         if (!cursorLocked) return;
 
-        float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity;
-        float mouseY = Input.GetAxis("Mouse Y") * mouseSensitivity;
+        float mx = Input.GetAxis("Mouse X") * mouseSensitivity;
+        float my = Input.GetAxis("Mouse Y") * mouseSensitivity;
 
-        // Xoay ngang toàn bộ Player
-        transform.Rotate(0f, mouseX, 0f);
+        transform.Rotate(0f, mx, 0f);
 
-        // Xoay dọc Camera (clamp để không lật ngược đầu)
-        verticalAngle -= invertY ? -mouseY : mouseY;
-        verticalAngle  = Mathf.Clamp(verticalAngle, minVerticalAngle, maxVerticalAngle);
-
+        verticalAngle -= invertY ? -my : my;
+        verticalAngle  = Mathf.Clamp(verticalAngle, -85f, 85f);
         if (cam != null)
             cam.transform.localRotation = Quaternion.Euler(verticalAngle, 0f, 0f);
     }
 
-    // ── Public helpers ─────────────────────────────────────────────────────
+    // ── Public ─────────────────────────────────────────────────────────────
     public void SetCursorLock(bool locked)
     {
         cursorLocked     = locked;

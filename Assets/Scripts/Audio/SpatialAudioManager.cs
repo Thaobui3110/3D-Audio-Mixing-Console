@@ -53,6 +53,33 @@ public class SpatialAudioManager : MonoBehaviour
         loader.OnLoadError  += msg => Debug.LogWarning($"[SpatialAudioManager] Load error: {msg}");
     }
 
+    private void Start()
+    {
+        RegisterExistingSpeakers();
+    }
+
+    /// <summary>Tìm và đăng ký tất cả SpatialSoundObject đã có sẵn trong AudioWorld.</summary>
+    private void RegisterExistingSpeakers()
+    {
+        if (audioWorldParent == null) return;
+
+        foreach (var obj in audioWorldParent.GetComponentsInChildren<SpatialSoundObject>())
+        {
+            string id = obj.SourceID;
+            if (string.IsNullOrEmpty(id)) continue;
+            if (sources.ContainsKey(id))  continue;
+
+            sources[id] = obj;
+
+            // Cập nhật spawnCounter để tránh trùng ID khi spawn mới
+            if (id.StartsWith("Speaker_") && int.TryParse(id.Substring(8), out int num))
+                spawnCounter = Mathf.Max(spawnCounter, num);
+        }
+
+        if (sources.Count > 0)
+            Debug.Log($"[SpatialAudioManager] Đã đăng ký {sources.Count} speaker có sẵn.");
+    }
+
     private void OnDestroy()
     {
         if (Instance == this) Instance = null;
@@ -82,6 +109,7 @@ public class SpatialAudioManager : MonoBehaviour
         if (obj == null) { Destroy(go); return null; }
 
         go.name = id;
+        obj.SetSourceID(id);
         obj.SetMixerGroup(defaultMixerGroup);
 
         sources[id] = obj;

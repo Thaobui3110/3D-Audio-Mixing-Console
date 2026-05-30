@@ -52,6 +52,13 @@ public class SpatialSoundObject : MonoBehaviour
     public string DisplayName => displayName;
     public bool   IsPlaying   => audioSource != null && audioSource.isPlaying;
 
+    /// <summary>Gán sourceID sau khi spawn. Gọi bởi SpatialAudioManager.</summary>
+    internal void SetSourceID(string id)
+    {
+        sourceID    = id;
+        displayName = id;
+    }
+
     // ── Runtime ────────────────────────────────────────────────────────────
     private AudioSource        audioSource;
     private AudioLowPassFilter lpFilter;

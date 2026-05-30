@@ -24,6 +24,7 @@ public class AudioProcessorUI : MonoBehaviour
     // ── Upload ──────────────────────────────────────────────────────────────
     [Header("Upload")]
     [SerializeField] private TMP_InputField pathInputField;
+    [SerializeField] private Button         browseButton;
     [SerializeField] private Button         loadButton;
     [SerializeField] private Slider         loadingBar;
     [SerializeField] private TMP_Text       loadingLabel;
@@ -135,10 +136,11 @@ public class AudioProcessorUI : MonoBehaviour
 
     private void InitButtons()
     {
-        if (loadButton  != null) loadButton.onClick.AddListener(OnLoadClicked);
-        if (playButton  != null) playButton.onClick.AddListener(OnPlayClicked);
-        if (stopButton  != null) stopButton.onClick.AddListener(OnStopClicked);
-        if (spawnButton != null) spawnButton.onClick.AddListener(OnSpawnClicked);
+        if (browseButton != null) browseButton.onClick.AddListener(OnBrowseClicked);
+        if (loadButton   != null) loadButton.onClick.AddListener(OnLoadClicked);
+        if (playButton   != null) playButton.onClick.AddListener(OnPlayClicked);
+        if (stopButton   != null) stopButton.onClick.AddListener(OnStopClicked);
+        if (spawnButton  != null) spawnButton.onClick.AddListener(OnSpawnClicked);
     }
 
     private void InitDropdown()
@@ -151,6 +153,21 @@ public class AudioProcessorUI : MonoBehaviour
     }
 
     // ── Button callbacks ───────────────────────────────────────────────────
+    private void OnBrowseClicked()
+    {
+#if UNITY_EDITOR
+        string path = UnityEditor.EditorUtility.OpenFilePanel(
+            "Select Audio File", "", "wav,mp3,ogg");
+        if (!string.IsNullOrEmpty(path) && pathInputField != null)
+        {
+            pathInputField.text = path;
+            SetStatus($"Đã chọn: {System.IO.Path.GetFileName(path)}");
+        }
+#else
+        SetStatus("Browse chỉ hoạt động trong Editor. Nhập path thủ công cho build.");
+#endif
+    }
+
     private void OnLoadClicked()
     {
         if (fileLoader == null) return;
