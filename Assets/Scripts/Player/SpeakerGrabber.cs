@@ -1,219 +1,213 @@
 using UnityEngine;
+using TMPro;
+using UnityEngine.UI;
 
 /// <summary>
-/// Grab & Place cho SpatialSoundObject.
-/// Gắn trên Main Camera (cùng hierarchy với AudioListener).
-///
-/// FPS Mode (Tab OFF):
-///   - Nhìn vào speaker → highlight (emission sáng lên)
-///   - Nhấn E → grab: speaker bám theo tầm nhìn
-///   - Di chuyển WASD + xoay chuột → speaker di chuyển theo
-///   - Nhấn E lần nữa → release: speaker đặt tại vị trí hiện tại
-///
-/// UI Mode (Tab ON) / Top-Down (F2): Grab bị tắt.
-///
-/// SETUP: Main Camera → Add Component → SpeakerGrabber
+/// Attached to Main Camera (FPS mode).
+/// • Raycast every frame — highlights the speaker object being looked at.
+/// • Shows a screen-space tooltip label with the speaker's name on hover.
+/// • Press E to grab / release a speaker.
 /// </summary>
-[DisallowMultipleComponent]
 public class SpeakerGrabber : MonoBehaviour
 {
-    // ── Inspector ──────────────────────────────────────────────────────────
-    [Header("Controls")]
-    [SerializeField] private KeyCode grabKey       = KeyCode.E;
-    [SerializeField] private float   grabDistance   = 4f;
-    [SerializeField] private float   rayMaxDistance = 20f;
-    [SerializeField] private float   moveSmooth     = 12f;
+    [Header("Grab Settings")]
+    [SerializeField] private float grabDistance    = 5f;
+    [SerializeField] private float grabHoldDistance = 4.5f;
+    [SerializeField] private LayerMask grabMask    = ~0;
 
-    [Header("Visual Feedback")]
-    [SerializeField] private Color highlightColor    = new Color(1f, 1f, 0.5f, 1f);
-    [SerializeField] private float highlightEmission = 0.6f;
+    [Header("Highlight")]
+    [SerializeField] private Color hoverTintColor  = new Color(1f, 1f, 0.4f, 1f);
 
-    // ── State ──────────────────────────────────────────────────────────────
-    private FPSController       fps;
-    private TopDownView         topDown;
-    private SpatialSoundObject  lookedAt;
-    private SpatialSoundObject  grabbed;
-    private MaterialData        originalMat;
-    private Camera              cam;
+    [Header("Tooltip UI")]
+    [Tooltip("Assign a TextMeshProUGUI element in Canvas for the hover tooltip. " +
+             "If null, one will be created at runtime.")]
+    [SerializeField] private TextMeshProUGUI tooltipLabel;
 
-    private struct MaterialData
-    {
-        public Color    color;
-        public Color    emission;
-        public bool     hadEmission;
-        public Renderer renderer;
-    }
+    // ── Private ────────────────────────────────────────────────────────────
+    private Transform          grabbedSpeaker;
+    private SpatialSoundObject grabbedSSO;
+    private Renderer           hoveredRenderer;
+    private Color              originalEmission;
+    private static readonly int EmissionColorID = Shader.PropertyToID("_EmissionColor");
+
+    private RectTransform tooltipRect;
+    private Canvas        rootCanvas;
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
+
     private void Start()
     {
-        cam     = GetComponent<Camera>();
-        if (cam == null) cam = Camera.main;
-
-        fps     = FindObjectOfType<FPSController>();
-        topDown = GetComponent<TopDownView>();
+        EnsureTooltip();
+        HideTooltip();
     }
 
     private void Update()
     {
-        // Không hoạt động trong UI Mode hoặc Top-Down Mode
-        if (fps != null && fps.IsUIMode)          { ClearHighlight(); return; }
-        if (topDown != null && topDown.IsActive)   { ClearHighlight(); return; }
+        HandleHoverAndTooltip();
+        HandleGrabInput();
 
-        if (grabbed != null)
+        if (grabbedSpeaker != null)
+            MoveGrabbedSpeaker();
+    }
+
+    // ── Tooltip Setup ──────────────────────────────────────────────────────
+
+    private void EnsureTooltip()
+    {
+        if (tooltipLabel != null)
         {
-            UpdateGrabbedPosition();
+            tooltipRect = tooltipLabel.GetComponent<RectTransform>();
+            rootCanvas  = tooltipLabel.GetComponentInParent<Canvas>();
+            return;
+        }
 
-            if (Input.GetKeyDown(grabKey))
-                Release();
+        // Create a runtime tooltip if none assigned
+        var canvasGO = new GameObject("GrabberTooltipCanvas");
+        var canvas   = canvasGO.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 100;
+        canvasGO.AddComponent<CanvasScaler>();
+        canvasGO.AddComponent<GraphicRaycaster>();
+        rootCanvas = canvas;
+
+        var bgGO  = new GameObject("TooltipBG");
+        bgGO.transform.SetParent(canvasGO.transform, false);
+        var bg    = bgGO.AddComponent<Image>();
+        bg.color  = new Color(0f, 0f, 0f, 0.72f);
+        tooltipRect = bgGO.GetComponent<RectTransform>();
+        tooltipRect.sizeDelta = new Vector2(200f, 32f);
+        tooltipRect.pivot     = new Vector2(0f, 0f);
+
+        var lblGO = new GameObject("TooltipLabel");
+        lblGO.transform.SetParent(bgGO.transform, false);
+        tooltipLabel = lblGO.AddComponent<TextMeshProUGUI>();
+        tooltipLabel.fontSize  = 14f;
+        tooltipLabel.color     = Color.white;
+        tooltipLabel.alignment = TextAlignmentOptions.MidlineLeft;
+        tooltipLabel.margin    = new Vector4(6f, 0f, 6f, 0f);
+        var lblRT = lblGO.GetComponent<RectTransform>();
+        lblRT.anchorMin = Vector2.zero;
+        lblRT.anchorMax = Vector2.one;
+        lblRT.offsetMin = Vector2.zero;
+        lblRT.offsetMax = Vector2.zero;
+    }
+
+    // ── Hover / Tooltip ────────────────────────────────────────────────────
+
+    private void HandleHoverAndTooltip()
+    {
+        Ray ray = new Ray(transform.position, transform.forward);
+        bool hit = Physics.Raycast(ray, out RaycastHit hitInfo, grabDistance, grabMask);
+
+        SpatialSoundObject hoveredSSO = null;
+        if (hit)
+            hoveredSSO = hitInfo.collider.GetComponentInParent<SpatialSoundObject>();
+
+        if (hoveredSSO != null)
+        {
+            // Show tooltip at screen-space position slightly above crosshair
+            string label = hoveredSSO.gameObject.name;  // e.g. "Speaker_01"
+            ShowTooltip(label, Input.mousePosition + new Vector3(16f, 16f, 0f));
+
+            // Tint emission to indicate hover (only when not grabbed)
+            Renderer rend = hoveredSSO.GetComponentInChildren<Renderer>();
+            if (rend != null && rend != hoveredRenderer)
+            {
+                ClearHoverTint();
+                hoveredRenderer = rend;
+                // Store original via MaterialPropertyBlock
+                var pb = new MaterialPropertyBlock();
+                rend.GetPropertyBlock(pb);
+                originalEmission = pb.GetColor(EmissionColorID);
+                pb.SetColor(EmissionColorID, hoverTintColor);
+                rend.SetPropertyBlock(pb);
+            }
         }
         else
         {
-            UpdateLookDetection();
-
-            if (Input.GetKeyDown(grabKey) && lookedAt != null)
-                Grab(lookedAt);
+            HideTooltip();
+            ClearHoverTint();
         }
     }
 
-    // ── Look detection (RaycastAll — xuyên qua Room colliders) ────────────
-    private void UpdateLookDetection()
+    private void ShowTooltip(string text, Vector3 screenPos)
     {
-        var speaker = RaycastSpeaker();
+        if (tooltipLabel == null || tooltipRect == null) return;
+        tooltipLabel.text = text;
 
-        if (speaker != null && speaker != lookedAt)
-        {
-            ClearHighlight();
-            lookedAt = speaker;
-            ApplyHighlight(speaker);
-        }
-        else if (speaker == null && lookedAt != null)
-        {
-            ClearHighlight();
-        }
+        // Convert screen position for overlay canvas
+        tooltipRect.anchoredPosition = ScreenToCanvasPosition(screenPos);
+        tooltipLabel.gameObject.SetActive(true);
+        if (tooltipRect != null) tooltipRect.gameObject.SetActive(true);
     }
 
-    /// <summary>
-    /// RaycastAll từ camera forward — tìm SpatialSoundObject gần nhất,
-    /// bỏ qua Room walls/floor/ceiling.
-    /// </summary>
-    private SpatialSoundObject RaycastSpeaker()
+    private void HideTooltip()
     {
-        var hits = Physics.RaycastAll(
-            cam.transform.position, cam.transform.forward,
-            rayMaxDistance);
+        if (tooltipLabel == null) return;
+        tooltipLabel.gameObject.SetActive(false);
+        if (tooltipRect != null && tooltipRect != tooltipLabel.rectTransform)
+            tooltipRect.gameObject.SetActive(false);
+    }
 
-        SpatialSoundObject closest = null;
-        float closestDist = float.MaxValue;
+    private Vector2 ScreenToCanvasPosition(Vector3 screenPos)
+    {
+        if (rootCanvas == null) return screenPos;
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(
+            rootCanvas.transform as RectTransform,
+            screenPos,
+            rootCanvas.worldCamera,
+            out Vector2 localPoint);
+        return localPoint;
+    }
 
-        foreach (var hit in hits)
+    private void ClearHoverTint()
+    {
+        if (hoveredRenderer == null) return;
+        var pb = new MaterialPropertyBlock();
+        hoveredRenderer.GetPropertyBlock(pb);
+        pb.SetColor(EmissionColorID, originalEmission);
+        hoveredRenderer.SetPropertyBlock(pb);
+        hoveredRenderer = null;
+    }
+
+    // ── Grab ───────────────────────────────────────────────────────────────
+
+    private void HandleGrabInput()
+    {
+        if (!Input.GetKeyDown(KeyCode.E)) return;
+
+        if (grabbedSpeaker != null)
         {
-            var sso = hit.collider.GetComponent<SpatialSoundObject>();
-            if (sso != null && hit.distance < closestDist)
+            ReleaseSpeaker();
+            return;
+        }
+
+        Ray ray = new Ray(transform.position, transform.forward);
+        if (Physics.Raycast(ray, out RaycastHit hit, grabDistance, grabMask))
+        {
+            SpatialSoundObject sso = hit.collider.GetComponentInParent<SpatialSoundObject>();
+            if (sso != null)
             {
-                closest     = sso;
-                closestDist = hit.distance;
+                grabbedSpeaker = sso.transform;
+                grabbedSSO     = sso;
             }
         }
-        return closest;
     }
 
-    // ── Grab / Release ────────────────────────────────────────────────────
-    private void Grab(SpatialSoundObject speaker)
+    private void ReleaseSpeaker()
     {
-        grabbed = speaker;
-        ApplyGrabVisual(speaker);
-        Debug.Log($"[SpeakerGrabber] Grabbed {speaker.SourceID} — nhấn E để thả.");
+        if (grabbedSpeaker == null) return;
+        // Notify AudioReactiveObject so basePosition updates to dropped position
+        var aro = grabbedSpeaker.GetComponent<AudioReactiveObject>();
+        if (aro != null) aro.UpdateBasePosition();
+
+        grabbedSpeaker = null;
+        grabbedSSO     = null;
     }
 
-    private void Release()
+    private void MoveGrabbedSpeaker()
     {
-        if (grabbed == null) return;
-
-        // Clamp vào trong phòng nếu có RoomBounds
-        if (RoomBounds.Instance != null)
-            grabbed.transform.position = RoomBounds.Instance.ClampInside(grabbed.transform.position);
-
-        string id = grabbed.SourceID;
-        Vector3 pos = grabbed.transform.position;
-
-        RestoreMaterial();
-        grabbed  = null;
-        lookedAt = null;
-
-        Debug.Log($"[SpeakerGrabber] Released {id} tại ({pos.x:F1}, {pos.y:F1}, {pos.z:F1})");
-    }
-
-    private void UpdateGrabbedPosition()
-    {
-        Vector3 camForward = cam.transform.forward;
-        camForward.y = 0f;
-        if (camForward.sqrMagnitude < 0.01f) camForward = Vector3.forward;
-        camForward.Normalize();
-
-        Vector3 targetPos = cam.transform.position + camForward * grabDistance;
-        targetPos.y = grabbed.transform.position.y;
-
-        grabbed.transform.position = Vector3.Lerp(
-            grabbed.transform.position,
-            targetPos,
-            moveSmooth * Time.deltaTime
-        );
-    }
-
-    // ── Visual feedback ───────────────────────────────────────────────────
-    private void ApplyHighlight(SpatialSoundObject speaker)
-    {
-        var renderer = speaker.GetComponent<Renderer>();
-        if (renderer == null) return;
-
-        SaveMaterial(renderer);
-
-        var mat = renderer.material;
-        mat.EnableKeyword("_EMISSION");
-        mat.SetColor("_EmissionColor", highlightColor * highlightEmission);
-    }
-
-    private void ApplyGrabVisual(SpatialSoundObject speaker)
-    {
-        var renderer = speaker.GetComponent<Renderer>();
-        if (renderer == null) return;
-
-        if (originalMat.renderer == null) SaveMaterial(renderer);
-
-        var mat = renderer.material;
-        mat.EnableKeyword("_EMISSION");
-        mat.SetColor("_EmissionColor", highlightColor * (highlightEmission * 1.5f));
-    }
-
-    private void SaveMaterial(Renderer renderer)
-    {
-        var mat = renderer.material;
-        originalMat = new MaterialData
-        {
-            renderer    = renderer,
-            color       = mat.color,
-            emission    = mat.HasProperty("_EmissionColor") ? mat.GetColor("_EmissionColor") : Color.black,
-            hadEmission = mat.IsKeywordEnabled("_EMISSION")
-        };
-    }
-
-    private void RestoreMaterial()
-    {
-        if (originalMat.renderer == null) return;
-
-        var mat = originalMat.renderer.material;
-        mat.SetColor("_EmissionColor", originalMat.emission);
-        if (!originalMat.hadEmission)
-            mat.DisableKeyword("_EMISSION");
-
-        originalMat = default;
-    }
-
-    private void ClearHighlight()
-    {
-        if (lookedAt == null) return;
-        if (grabbed == null) RestoreMaterial();
-        lookedAt = null;
+        Vector3 target = transform.position + transform.forward * grabHoldDistance;
+        grabbedSpeaker.position = Vector3.Lerp(grabbedSpeaker.position, target, Time.deltaTime * 15f);
     }
 }

@@ -206,6 +206,11 @@ public class SpatialAudioManager : MonoBehaviour
 
         pendingAssignID = null;
     }
+    public SpatialSoundObject GetSourceObject(string id)
+    {
+        sources.TryGetValue(id, out var sso);
+        return sso;
+    }
 
     /// <summary>Vị trí trước mặt player, cách 4-6m, lệch ngang nhẹ để không chồng.</summary>
     private Vector3 SpawnInFrontOfPlayer()

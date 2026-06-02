@@ -11053,6 +11053,85 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1230206287}
   m_CullTransparentMesh: 1
+--- !u!1 &1239917639
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1239917642}
+  - component: {fileID: 1239917641}
+  - component: {fileID: 1239917640}
+  m_Layer: 0
+  m_Name: WaveSpec
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1239917640
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1239917639}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a6117cbc3f7119a41a1b904a6334aea1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  panelSize: {x: 400, y: 120}
+  panelPosition: {x: 600, y: 800}
+  titleBarHeight: 24
+  dropdownHeight: 24
+  barCount: 256
+  heightScale: 0.85
+  panelBgColor: {r: 0.08, g: 0.08, b: 0.12, a: 0.92}
+  titleColor: {r: 0.12, g: 0.12, b: 0.18, a: 1}
+  quietColor: {r: 0.25, g: 0.85, b: 0.5, a: 1}
+  loudColor: {r: 1, g: 0.3, b: 0.1, a: 1}
+--- !u!114 &1239917641
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1239917639}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cce2dde244f0e9a4e83af200dd8dec7c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  panelSize: {x: 400, y: 160}
+  panelPosition: {x: 1200, y: 800}
+  titleBarHeight: 24
+  dropdownHeight: 24
+  barCount: 128
+  scaleMultiplier: 120
+  logScale: 1
+  panelBgColor: {r: 0.08, g: 0.08, b: 0.12, a: 0.92}
+  titleColor: {r: 0.12, g: 0.12, b: 0.18, a: 1}
+  bassColor: {r: 1, g: 0.25, b: 0.1, a: 1}
+  midColor: {r: 0.2, g: 1, b: 0.35, a: 1}
+  trebleColor: {r: 0.5, g: 0.35, b: 1, a: 1}
+--- !u!4 &1239917642
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1239917639}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0.00000047683716, y: 3.4499998, z: 2.1999998}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_RootOrder: 8
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1256557197
 GameObject:
   m_ObjectHideFlags: 0
@@ -13954,12 +14033,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 64941b8351cf99d479a8bf2ded7015fd, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  grabKey: 101
   grabDistance: 4
-  rayMaxDistance: 20
-  moveSmooth: 12
-  highlightColor: {r: 1, g: 1, b: 0.5, a: 1}
-  highlightEmission: 0.6
+  grabHoldDistance: 4.5
+  grabMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  hoverTintColor: {r: 1, g: 1, b: 0.4, a: 1}
+  tooltipLabel: {fileID: 0}
 --- !u!114 &1520254227
 MonoBehaviour:
   m_ObjectHideFlags: 0
