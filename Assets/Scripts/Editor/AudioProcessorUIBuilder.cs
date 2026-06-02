@@ -104,30 +104,86 @@ public class AudioProcessorUIBuilder : EditorWindow
         // ── Panel ───────────────────────────────────────────────────────
         var panel   = MakeGO("AudioProcessorPanel", canvas.transform);
         var panelRT = panel.GetComponent<RectTransform>();
-        panelRT.anchorMin        = new Vector2(0f, 0.5f);
-        panelRT.anchorMax        = new Vector2(0f, 0.5f);
-        panelRT.pivot            = new Vector2(0f, 0.5f);
-        panelRT.anchoredPosition = new Vector2(16f, 0f);
+        panelRT.anchorMin        = new Vector2(0f, 1f);
+        panelRT.anchorMax        = new Vector2(0f, 1f);
+        panelRT.pivot            = new Vector2(0f, 1f);   // top-left → panel mở xuống dưới
+        panelRT.anchoredPosition = new Vector2(16f, -16f);
         panel.AddComponent<Image>().color = panelBg;
 
         // ── AudioProcessorUI component ───────────────────────────────────
         var uiComp = panel.AddComponent<AudioProcessorUI>();
         var so     = new SerializedObject(uiComp);
 
-        // ── Content ──────────────────────────────────────────────────────
+        // ── Title bar (drag handle + toggle button) ──────────────────────
+        float titleBarH = 32f;
+        var titleBar   = MakeGO("TitleBar", panel.transform);
+        var titleBarRT = titleBar.GetComponent<RectTransform>();
+        titleBarRT.anchorMin = new Vector2(0f, 1f);
+        titleBarRT.anchorMax = new Vector2(1f, 1f);
+        titleBarRT.pivot     = new Vector2(0.5f, 1f);
+        titleBarRT.sizeDelta = new Vector2(0f, titleBarH);
+        titleBarRT.anchoredPosition = Vector2.zero;
+        titleBar.AddComponent<Image>().color = new Color(0.18f, 0.2f, 0.28f);
+
+        // Title label
+        var titleLabel   = MakeGO("TitleLabel", titleBar.transform);
+        var titleLabelRT = titleLabel.GetComponent<RectTransform>();
+        titleLabelRT.anchorMin = new Vector2(0f, 0f);
+        titleLabelRT.anchorMax = new Vector2(1f, 1f);
+        titleLabelRT.offsetMin = new Vector2(10f, 0f);
+        titleLabelRT.offsetMax = new Vector2(-40f, 0f);
+        var titleTMP = titleLabel.AddComponent<TextMeshProUGUI>();
+        titleTMP.text      = "Audio Processor";
+        titleTMP.fontSize  = 13f;
+        titleTMP.fontStyle = FontStyles.Bold;
+        titleTMP.color     = new Color(0.75f, 0.82f, 0.95f);
+        titleTMP.alignment = TextAlignmentOptions.Left | TextAlignmentOptions.Midline;
+
+        // Toggle button (▼/▲)
+        var toggleGO   = MakeGO("ToggleButton", titleBar.transform);
+        var toggleRT   = toggleGO.GetComponent<RectTransform>();
+        toggleRT.anchorMin = new Vector2(1f, 0f);
+        toggleRT.anchorMax = new Vector2(1f, 1f);
+        toggleRT.pivot     = new Vector2(1f, 0.5f);
+        toggleRT.sizeDelta = new Vector2(36f, 0f);
+        toggleRT.anchoredPosition = new Vector2(-4f, 0f);
+        toggleGO.AddComponent<Image>().color = new Color(0.25f, 0.28f, 0.38f);
+        var toggleBtn  = toggleGO.AddComponent<Button>();
+        var toggleTMP  = MakeGO("Label", toggleGO.transform);
+        StretchRT(toggleTMP, 0f, 0f);
+        var toggleText = toggleTMP.AddComponent<TextMeshProUGUI>();
+        toggleText.text      = "\u25BC"; // ▼
+        toggleText.fontSize  = 14f;
+        toggleText.color     = Color.white;
+        toggleText.alignment = TextAlignmentOptions.Center | TextAlignmentOptions.Midline;
+
+        // ── Content (dưới title bar) ──────────────────────────────────────
         var content   = MakeGO("Content", panel.transform);
         var contentRT = content.GetComponent<RectTransform>();
-        contentRT.anchorMin = Vector2.zero;
-        contentRT.anchorMax = Vector2.one;
+        contentRT.anchorMin = new Vector2(0f, 0f);
+        contentRT.anchorMax = new Vector2(1f, 1f);
         contentRT.offsetMin = new Vector2(padding, padding);
-        contentRT.offsetMax = new Vector2(-padding, -padding);
+        contentRT.offsetMax = new Vector2(-padding, -(titleBarH + padding));
         var vlg = content.AddComponent<VerticalLayoutGroup>();
         vlg.spacing            = 5f;
         vlg.childControlHeight = false;
         vlg.childControlWidth  = true;
         vlg.childForceExpandHeight = false;
 
-        float totalH = padding * 2f;
+        // ── UIPanelController (drag + collapse) ──────────────────────────
+        var panelCtrl = titleBar.AddComponent<UIPanelController>();
+        var panelCtrlSO = new SerializedObject(panelCtrl);
+        var propContent = panelCtrlSO.FindProperty("contentArea");
+        if (propContent != null) propContent.objectReferenceValue = contentRT;
+        var propToggleBtn = panelCtrlSO.FindProperty("toggleButton");
+        if (propToggleBtn != null) propToggleBtn.objectReferenceValue = toggleBtn;
+        var propToggleLabel = panelCtrlSO.FindProperty("toggleLabel");
+        if (propToggleLabel != null) propToggleLabel.objectReferenceValue = toggleText;
+        var propPanelRT = panelCtrlSO.FindProperty("panelRT");
+        if (propPanelRT != null) propPanelRT.objectReferenceValue = panelRT;
+        panelCtrlSO.ApplyModifiedProperties();
+
+        float totalH = titleBarH + padding * 2f;
 
         // ── Upload section ───────────────────────────────────────────────
         totalH += MakeUploadSection(content.transform, so);
@@ -278,15 +334,103 @@ public class AudioProcessorUIBuilder : EditorWindow
 
         var ddGO  = MakeGO("SourceDropdown", ddRow.transform);
         ddGO.AddComponent<Image>().color = new Color(0.15f, 0.15f, 0.20f);
+
+        // Caption label
         var ddLblGO = MakeGO("Label", ddGO.transform);
         StretchRT(ddLblGO, 8f, 2f);
         var ddTMP   = ddLblGO.AddComponent<TextMeshProUGUI>();
         ddTMP.fontSize  = 13f;
         ddTMP.color     = Color.white;
         ddTMP.alignment = TextAlignmentOptions.Left | TextAlignmentOptions.Midline;
-        var dd          = ddGO.AddComponent<TMP_Dropdown>();
+
+        // ── Dropdown Template hierarchy ──────────────────────────────────
+        // Template (inactive by default — TMP_Dropdown activates it on click)
+        var template   = MakeGO("Template", ddGO.transform);
+        var templateRT = template.GetComponent<RectTransform>();
+        templateRT.anchorMin        = new Vector2(0f, 0f);
+        templateRT.anchorMax        = new Vector2(1f, 0f);
+        templateRT.pivot            = new Vector2(0.5f, 1f);
+        templateRT.anchoredPosition = new Vector2(0f, 0f);
+        templateRT.sizeDelta        = new Vector2(0f, 150f);
+        template.AddComponent<Image>().color = new Color(0.12f, 0.12f, 0.16f);
+        var scrollRect = template.AddComponent<ScrollRect>();
+        scrollRect.horizontal = false;
+
+        // Viewport (clip area)
+        var viewport   = MakeGO("Viewport", template.transform);
+        var viewportRT = viewport.GetComponent<RectTransform>();
+        viewportRT.anchorMin = Vector2.zero;
+        viewportRT.anchorMax = Vector2.one;
+        viewportRT.sizeDelta = Vector2.zero;
+        viewportRT.offsetMin = Vector2.zero;
+        viewportRT.offsetMax = Vector2.zero;
+        viewport.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.003f); // near invisible, needed for mask
+        viewport.AddComponent<Mask>().showMaskGraphic = false;
+
+        // Content (items go here)
+        var content   = MakeGO("Content", viewport.transform);
+        var contentRT = content.GetComponent<RectTransform>();
+        contentRT.anchorMin = new Vector2(0f, 1f);
+        contentRT.anchorMax = new Vector2(1f, 1f);
+        contentRT.pivot     = new Vector2(0.5f, 1f);
+        contentRT.sizeDelta = new Vector2(0f, 28f);
+        var contentVLG = content.AddComponent<VerticalLayoutGroup>();
+        contentVLG.childControlHeight      = true;
+        contentVLG.childControlWidth       = true;
+        contentVLG.childForceExpandHeight  = false;
+        contentVLG.childForceExpandWidth   = true;
+        content.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+        scrollRect.viewport = viewportRT;
+        scrollRect.content  = contentRT;
+
+        // Item (template for each dropdown option)
+        var item   = MakeGO("Item", content.transform);
+        SetH(item, 28f);
+        var itemImg = item.AddComponent<Image>().color = new Color(0.18f, 0.18f, 0.24f);
+        var toggle  = item.AddComponent<Toggle>();
+        toggle.isOn = true;
+        toggle.targetGraphic = item.GetComponent<Image>();
+
+        // Item Background (highlight on hover/select)
+        var itemBg   = MakeGO("Item Background", item.transform);
+        StretchRT(itemBg, 0f, 0f);
+        var itemBgImg = itemBg.AddComponent<Image>();
+        itemBgImg.color = new Color(0.25f, 0.4f, 0.6f, 0.4f);
+        toggle.graphic = itemBgImg;
+
+        // Item Checkmark (optional — small indicator)
+        var checkGO   = MakeGO("Item Checkmark", item.transform);
+        var checkRT   = checkGO.GetComponent<RectTransform>();
+        checkRT.anchorMin = new Vector2(0f, 0f);
+        checkRT.anchorMax = new Vector2(0f, 1f);
+        checkRT.sizeDelta = new Vector2(20f, 0f);
+        checkRT.anchoredPosition = new Vector2(10f, 0f);
+        var checkImg  = checkGO.AddComponent<Image>();
+        checkImg.color = new Color(0.3f, 0.8f, 0.4f);
+        toggle.graphic = checkImg;
+
+        // Item Label
+        var itemLbl   = MakeGO("Item Label", item.transform);
+        var itemLblRT = itemLbl.GetComponent<RectTransform>();
+        itemLblRT.anchorMin = Vector2.zero;
+        itemLblRT.anchorMax = Vector2.one;
+        itemLblRT.offsetMin = new Vector2(24f, 0f);
+        itemLblRT.offsetMax = new Vector2(-8f, 0f);
+        var itemTMP   = itemLbl.AddComponent<TextMeshProUGUI>();
+        itemTMP.fontSize  = 12f;
+        itemTMP.color     = Color.white;
+        itemTMP.alignment = TextAlignmentOptions.Left | TextAlignmentOptions.Midline;
+
+        // Template inactive by default
+        template.SetActive(false);
+
+        // ── TMP_Dropdown component ───────────────────────────────────────
+        var dd           = ddGO.AddComponent<TMP_Dropdown>();
         dd.targetGraphic = ddGO.GetComponent<Image>();
         dd.captionText   = ddTMP;
+        dd.template      = templateRT;
+        dd.itemText      = itemTMP;
         dd.options.Add(new TMP_Dropdown.OptionData("— All Sources —"));
         SafeSet(so, "sourceDropdown", dd);
 

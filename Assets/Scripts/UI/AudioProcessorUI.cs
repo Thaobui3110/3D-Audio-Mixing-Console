@@ -90,6 +90,19 @@ public class AudioProcessorUI : MonoBehaviour
         HookFileLoader();
         HookAudioManager();
 
+        // Reset TOÀN BỘ global mixer về neutral — DSP giờ hoàn toàn per-object
+        if (processor != null)
+        {
+            processor.SetLowPassCutoff(22000f);
+            processor.SetHighPassCutoff(20f);
+            processor.SetMidEQGain(0f);
+            processor.SetReverbWet(0f);
+            processor.SetReverbDecay(1f);
+            processor.SetCompressorThreshold(0f);
+            processor.SetCompressorMakeupGain(0f);
+            processor.SetMasterVolume(1f);
+        }
+
         if (loadingBar != null) loadingBar.gameObject.SetActive(false);
         SetStatus("Ready — Upload audio hoặc chọn speaker.");
     }
@@ -200,78 +213,133 @@ public class AudioProcessorUI : MonoBehaviour
 
     private void OnSpawnClicked()
     {
-        audioManager?.SpawnSpeaker();
+        var speaker = audioManager?.SpawnSpeaker();
         RefreshDropdown();
-        SetStatus("Speaker mới đã spawn trong AudioWorld.");
+        if (speaker != null)
+        {
+            var p = speaker.transform.position;
+            SetStatus($"✓ Spawned {speaker.SourceID} tại ({p.x:F1}, {p.y:F1}, {p.z:F1}) — nhìn phía trước.");
+        }
     }
 
     private void OnDropdownChanged(int index)
     {
         if (sourceDropdown == null || index < 0) return;
         selectedSourceID = index == 0 ? null : sourceDropdown.options[index].text;
-        SetStatus(selectedSourceID != null ? $"Selected: {selectedSourceID}" : "Selected: All Sources");
+
+        var src = GetSelectedSource();
+        if (src != null)
+        {
+            // Load tất cả per-object values vào sliders
+            SetSliderNoNotify(sliderLowPass,          src.EQLowPassCutoff);
+            SetSliderNoNotify(sliderHighPass,         src.EQHighPassCutoff);
+            SetSliderNoNotify(sliderMidEQ,            src.EQMidGain);
+            SetSliderNoNotify(sliderReverbWet,        Mathf.InverseLerp(-10000f, 0f, src.ReverbRoom));
+            SetSliderNoNotify(sliderReverbDecay,      src.ReverbDecayTime);
+            SetSliderNoNotify(sliderCompThreshold,    src.CompThreshold);
+            SetSliderNoNotify(sliderCompMakeupGain,   src.CompMakeupGain);
+            SetSliderNoNotify(sliderMasterVolume,     src.Volume);
+
+            SetLabel(labelLowPass,        FormatHz(src.EQLowPassCutoff));
+            SetLabel(labelHighPass,       FormatHz(src.EQHighPassCutoff));
+            SetLabel(labelMidEQ,          FormatDB(src.EQMidGain));
+            SetLabel(labelReverbWet,      FormatPercent(Mathf.InverseLerp(-10000f, 0f, src.ReverbRoom)));
+            SetLabel(labelReverbDecay,    FormatSeconds(src.ReverbDecayTime));
+            SetLabel(labelCompThreshold,  FormatDB(src.CompThreshold));
+            SetLabel(labelCompMakeupGain, FormatDB(src.CompMakeupGain));
+            SetLabel(labelMasterVolume,   FormatPercent(src.Volume));
+
+            SetStatus($"Selected: {selectedSourceID} — toàn bộ EQ riêng cho source này");
+        }
+        else
+        {
+            SetStatus("All Sources — chỉnh sẽ áp dụng cho tất cả speakers");
+        }
     }
 
-    // ── Slider callbacks ───────────────────────────────────────────────────
+    /// <summary>Lấy SpatialSoundObject đang chọn trong dropdown.</summary>
+    private SpatialSoundObject GetSelectedSource()
+    {
+        if (string.IsNullOrEmpty(selectedSourceID) || audioManager == null) return null;
+        return audioManager.Get(selectedSourceID);
+    }
 
-    // EQ
+    /// <summary>Set slider value mà không trigger OnValueChanged callback.</summary>
+    private void SetSliderNoNotify(Slider s, float v)
+    {
+        if (s == null) return;
+        s.SetValueWithoutNotify(v);
+    }
+
+    // ── Slider callbacks — ALL per-object ──────────────────────────────────
+    // Chọn speaker cụ thể → chỉnh riêng. "All Sources" → áp cho tất cả.
+
     public void OnLowPassChanged(float v)
     {
-        processor?.SetLowPassCutoff(v);
+        PerObject(s => s.SetEQLowPass(v));
         SetLabel(labelLowPass, FormatHz(v));
-        SetStatus($"Low Pass: {FormatHz(v)}");
     }
 
     public void OnHighPassChanged(float v)
     {
-        processor?.SetHighPassCutoff(v);
+        PerObject(s => s.SetEQHighPass(v));
         SetLabel(labelHighPass, FormatHz(v));
-        SetStatus($"High Pass: {FormatHz(v)}");
     }
 
     public void OnMidEQChanged(float v)
     {
-        processor?.SetMidEQGain(v);
+        PerObject(s => s.SetEQMidGain(v));
         SetLabel(labelMidEQ, FormatDB(v));
-        SetStatus($"Mid EQ: {FormatDB(v)}");
     }
 
-    // Reverb
     public void OnReverbWetChanged(float v)
     {
-        processor?.SetReverbWet(v);
+        // Map 0..1 → -10000..0 cho AudioReverbFilter.room
+        float room = Mathf.Lerp(-10000f, 0f, v);
+        PerObject(s => s.SetReverbRoom(room));
         SetLabel(labelReverbWet, FormatPercent(v));
-        SetStatus($"Reverb Wet: {FormatPercent(v)}");
     }
 
     public void OnReverbDecayChanged(float v)
     {
-        processor?.SetReverbDecay(v);
+        PerObject(s => s.SetReverbDecay(v));
         SetLabel(labelReverbDecay, FormatSeconds(v));
-        SetStatus($"Reverb Decay: {FormatSeconds(v)}");
     }
 
-    // Compressor
     public void OnCompThresholdChanged(float v)
     {
-        processor?.SetCompressorThreshold(v);
+        PerObject(s => s.SetCompThreshold(v));
         SetLabel(labelCompThreshold, FormatDB(v));
-        SetStatus($"Comp Threshold: {FormatDB(v)}");
     }
 
     public void OnCompMakeupGainChanged(float v)
     {
-        processor?.SetCompressorMakeupGain(v);
+        PerObject(s => s.SetCompMakeupGain(v));
         SetLabel(labelCompMakeupGain, FormatDB(v));
-        SetStatus($"Comp Makeup Gain: {FormatDB(v)}");
     }
 
-    // Master
     public void OnMasterVolumeChanged(float v)
     {
-        processor?.SetMasterVolume(v);
+        PerObject(s => s.SetVolume(v));
         SetLabel(labelMasterVolume, FormatPercent(v));
-        SetStatus($"Master Volume: {FormatPercent(v)}");
+    }
+
+    /// <summary>Áp dụng cho speaker đang chọn, hoặc tất cả nếu "All Sources".</summary>
+    private void PerObject(System.Action<SpatialSoundObject> action)
+    {
+        var src = GetSelectedSource();
+        if (src != null)
+        {
+            action(src);
+        }
+        else if (audioManager != null)
+        {
+            foreach (var id in audioManager.GetAllIDs())
+            {
+                var s = audioManager.Get(id);
+                if (s != null) action(s);
+            }
+        }
     }
 
     // ── FileLoader hooks ───────────────────────────────────────────────────

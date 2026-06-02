@@ -56,6 +56,7 @@ public class SpatialAudioManager : MonoBehaviour
     private void Start()
     {
         RegisterExistingSpeakers();
+        DarkenFloor();
     }
 
     /// <summary>Tìm và đăng ký tất cả SpatialSoundObject đã có sẵn trong AudioWorld.</summary>
@@ -89,28 +90,51 @@ public class SpatialAudioManager : MonoBehaviour
         }
     }
 
+    /// <summary>Tự động tối hóa Floor nếu tìm thấy trong scene.</summary>
+    private void DarkenFloor()
+    {
+        var floor = GameObject.Find("Floor");
+        if (floor == null) return;
+        var renderer = floor.GetComponent<Renderer>();
+        if (renderer == null) return;
+
+        // Tạo material mới để không ảnh hưởng shared material
+        var mat = new Material(renderer.sharedMaterial);
+        mat.color = new Color(0.04f, 0.04f, 0.06f);  // gần đen, hơi xanh tối
+        renderer.material = mat;
+    }
+
     // ── Public API ─────────────────────────────────────────────────────────
 
-    /// <summary>Spawn speaker mới tại vị trí ngẫu nhiên trong AudioWorld.</summary>
+    /// <summary>Spawn speaker mới. Nếu chưa gán prefab → tự tạo Cube runtime.</summary>
     public SpatialSoundObject SpawnSpeaker(Vector3? position = null)
     {
-        if (!speakerPrefab)
+        spawnCounter++;
+        string  id  = $"Speaker_{spawnCounter:D2}";
+        Vector3 pos = position ?? SpawnInFrontOfPlayer();
+
+        GameObject go;
+
+        if (speakerPrefab != null)
         {
-            Debug.LogError("[SpatialAudioManager] speakerPrefab chưa gán!", this);
-            return null;
+            go = Instantiate(speakerPrefab, pos, Quaternion.identity, audioWorldParent);
+        }
+        else
+        {
+            // Fallback: tạo Cube runtime làm speaker tạm thời
+            go = CreateRuntimeSpeaker(pos);
         }
 
-        spawnCounter++;
-        string id  = $"Speaker_{spawnCounter:D2}";
-        Vector3 pos = position ?? RandomSpawnPosition();
-
-        var go  = Instantiate(speakerPrefab, pos, Quaternion.identity, audioWorldParent);
         var obj = go.GetComponent<SpatialSoundObject>();
-        if (obj == null) { Destroy(go); return null; }
+        if (obj == null) obj = go.AddComponent<SpatialSoundObject>();
 
         go.name = id;
         obj.SetSourceID(id);
         obj.SetMixerGroup(defaultMixerGroup);
+
+        // Đảm bảo có AudioReactiveObject để cube phản ứng với nhạc
+        if (go.GetComponent<AudioReactiveObject>() == null)
+            go.AddComponent<AudioReactiveObject>();
 
         sources[id] = obj;
         OnSourceSpawned?.Invoke(obj);
@@ -183,11 +207,108 @@ public class SpatialAudioManager : MonoBehaviour
         pendingAssignID = null;
     }
 
-    private static Vector3 RandomSpawnPosition()
+    /// <summary>Vị trí trước mặt player, cách 4-6m, lệch ngang nhẹ để không chồng.</summary>
+    private Vector3 SpawnInFrontOfPlayer()
     {
+        var cam = Camera.main;
+        if (cam == null)
+            return FallbackSpawnPosition();
+ 
+        // ── Tính vị trí trước mặt camera ──
+        Vector3 fwd = cam.transform.forward;
+        fwd.y = 0f;
+        if (fwd.sqrMagnitude < 0.01f) fwd = Vector3.forward;
+        fwd.Normalize();
+ 
+        Vector3 right = cam.transform.right;
+        right.y = 0f;
+        right.Normalize();
+ 
+        float dist       = Random.Range(3f, 5f);
+        float sideOffset = Random.Range(-1.2f, 1.2f);
+ 
+        Vector3 pos = cam.transform.position + fwd * dist + right * sideOffset;
+        pos.y = 0f;
+ 
+        // ── Clamp vào bên trong phòng ──
+        if (RoomBounds.Instance != null)
+        {
+            pos = RoomBounds.Instance.ClampInside(pos);
+ 
+            // Nếu sau khi clamp, vị trí quá gần player (< 1.5m)
+            // → player đang nhìn ra tường → spawn random trong phòng
+            float distToPlayer = Vector3.Distance(
+                new Vector3(cam.transform.position.x, 0, cam.transform.position.z),
+                new Vector3(pos.x, 0, pos.z)
+            );
+ 
+            if (distToPlayer < 1.5f)
+            {
+                pos = RoomBounds.Instance.RandomPositionOnFloor();
+                Debug.Log("[SpatialAudioManager] Player nhìn ra tường → spawn random trong phòng");
+            }
+        }
+ 
+        return pos;
+    }
+ 
+    /// <summary>Fallback khi không có camera — spawn trong phòng nếu có RoomBounds.</summary>
+    private Vector3 FallbackSpawnPosition()
+    {
+        if (RoomBounds.Instance != null)
+            return RoomBounds.Instance.RandomPositionOnFloor();
+ 
+        // Không có RoomBounds → spawn quanh origin
         float angle = Random.Range(0f, 360f) * Mathf.Deg2Rad;
-        float dist  = Random.Range(3f, 8f);
-        return new Vector3(Mathf.Cos(angle) * dist, 0f, Mathf.Sin(angle) * dist);
+        float r     = Random.Range(3f, 6f);
+        return new Vector3(Mathf.Cos(angle) * r, 0f, Mathf.Sin(angle) * r);
+    }
+
+    // ── Màu sắc cho Cube runtime — mỗi speaker một màu khác nhau ────────
+    private static readonly Color[] SpeakerColors =
+    {
+        new Color(0.2f, 0.6f, 1.0f),   // xanh dương
+        new Color(1.0f, 0.4f, 0.2f),   // cam đỏ
+        new Color(0.3f, 1.0f, 0.4f),   // xanh lá
+        new Color(1.0f, 0.85f, 0.1f),  // vàng
+        new Color(0.8f, 0.3f, 1.0f),   // tím
+        new Color(0.1f, 0.9f, 0.9f),   // cyan
+    };
+
+    /// <summary>
+    /// Tạo Cube runtime làm speaker khi chưa gán prefab.
+    /// Cube 0.6m, nổi 0.5m trên sàn, material URP/Lit sáng + Emission.
+    /// </summary>
+    private GameObject CreateRuntimeSpeaker(Vector3 pos)
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        go.transform.SetParent(audioWorldParent, false);
+        go.transform.position   = pos + Vector3.up * 1.2f;  // lơ lửng — AudioReactiveObject sẽ bob
+        go.transform.localScale = Vector3.one * 0.6f;
+
+        // Material — tạo mới, màu sáng + emission
+        var renderer = go.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            var mat = new Material(Shader.Find("Universal Render Pipeline/Lit")
+                                ?? Shader.Find("Standard"));
+            Color col = SpeakerColors[spawnCounter % SpeakerColors.Length];
+            mat.color = col;
+
+            // Bật emission để cube phát sáng — dễ nhìn kể cả trong bóng tối
+            mat.EnableKeyword("_EMISSION");
+            mat.SetColor("_EmissionColor", col * 0.5f);
+            mat.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
+
+            renderer.material = mat;
+        }
+
+        // Collider mặc định từ CreatePrimitive là BoxCollider — đổi sang SphereCollider cho SpatialSoundObject
+        var box = go.GetComponent<BoxCollider>();
+        if (box != null) Object.Destroy(box);
+
+        Debug.Log($"[SpatialAudioManager] Tạo Cube speaker runtime tại {pos}");
+        return go;
     }
 
     private void ForEach(System.Action<SpatialSoundObject> action)
