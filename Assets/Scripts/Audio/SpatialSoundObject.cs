@@ -44,7 +44,8 @@ public class SpatialSoundObject : MonoBehaviour
     [SerializeField, Range(0.2f, 5f)]      private float eqMidQ           = 1f;
 
     [Header("Per-Object Reverb")]
-    [SerializeField, Range(-10000f, 0f)] private float reverbRoom      = -1000f;
+    // BUG FIX: default -1000 → 0f agar slider 0% = fully dry
+    [SerializeField, Range(-10000f, 0f)] private float reverbRoom      = 0f;
     [SerializeField, Range(0.1f, 20f)]   private float reverbDecayTime = 1.5f;
 
     [Header("Per-Object Compressor")]
@@ -86,20 +87,22 @@ public class SpatialSoundObject : MonoBehaviour
     private AudioHighPassFilter hpFilter;
     private AudioReverbFilter   reverbFilter;
     private Transform           listener;
-    private Transform           listenerRoot;   // Player root — loại khỏi occlusion
+    private Transform           listenerRoot;
     private float               currentOcclusion;
 
-    // Mid EQ biquad coefficients (cho OnAudioFilterRead)
-    private float bq_a0, bq_a1, bq_a2, bq_b1, bq_b2;
+    // ── Biquad (Mid EQ) — thread-safe double buffer ───────────────────────
+    // Main thread ghi vào _pending*, audio thread đọc từ _live*.
+    // _bqPending flag báo audio thread swap vào khi bắt đầu buffer mới.
+    private float _pa0, _pa1, _pa2, _pb1, _pb2;    // pending (main thread writes)
+    private float _la0, _la1, _la2, _lb1, _lb2;    // live    (audio thread reads)
+    private volatile bool _bqPending = false;
+
     private float bq_x1L, bq_x2L, bq_y1L, bq_y2L;
     private float bq_x1R, bq_x2R, bq_y1R, bq_y2R;
-    private bool  bqDirty = true;
 
     // Compressor envelope
     private float compEnvelope;
 
-    // Cache sample rate — OnAudioFilterRead chạy trên audio thread,
-    // không được gọi AudioSettings.outputSampleRate
     private float sampleRate;
 
     // ══════════════════════════════════════════════════════════════════════
@@ -112,7 +115,7 @@ public class SpatialSoundObject : MonoBehaviour
         audioSource  = GetComponent<AudioSource>();
         lpFilter     = GetComponent<AudioLowPassFilter>();
         hpFilter     = GetComponent<AudioHighPassFilter>();
-        reverbFilter = GetComponent<AudioReverbFilter>();
+        reverbFilter = GetOrAddReverbFilter();
 
         ConfigureAudioSource();
         ConfigureCollider();
@@ -128,14 +131,13 @@ public class SpatialSoundObject : MonoBehaviour
         if (al != null)
         {
             listener     = al.transform;
-            listenerRoot = listener.root;   // Player GO chứa CharacterController
+            listenerRoot = listener.root;
         }
     }
 
     private void Update()
     {
         if (useOcclusion) UpdateOcclusion();
-        if (bqDirty)      RecalcBiquad();
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -198,7 +200,8 @@ public class SpatialSoundObject : MonoBehaviour
     public void SetEQMidGain(float dB)
     {
         eqMidGain = Mathf.Clamp(dB, -12f, 12f);
-        bqDirty = true;
+        // Tính coefficients trên main thread, audio thread sẽ swap vào
+        RecalcBiquad();
     }
 
     // ── Per-Object Reverb ─────────────────────────────────────────────────
@@ -206,13 +209,22 @@ public class SpatialSoundObject : MonoBehaviour
     public void SetReverbRoom(float room)
     {
         reverbRoom = Mathf.Clamp(room, -10000f, 0f);
-        if (reverbFilter != null) reverbFilter.room = reverbRoom;
+        if (reverbFilter != null)
+        {
+            // Preset phải là User — chỉ khi đó Unity mới cho phép set room
+            EnsureReverbPresetUser();
+            reverbFilter.room = reverbRoom;
+        }
     }
 
     public void SetReverbDecay(float decay)
     {
         reverbDecayTime = Mathf.Clamp(decay, 0.1f, 20f);
-        if (reverbFilter != null) reverbFilter.decayTime = reverbDecayTime;
+        if (reverbFilter != null)
+        {
+            EnsureReverbPresetUser();
+            reverbFilter.decayTime = reverbDecayTime;
+        }
     }
 
     // ── Per-Object Compressor ─────────────────────────────────────────────
@@ -231,6 +243,19 @@ public class SpatialSoundObject : MonoBehaviour
     //  PRIVATE — Setup
     // ══════════════════════════════════════════════════════════════════════
 
+    private AudioReverbFilter GetOrAddReverbFilter()
+    {
+        var rf = GetComponent<AudioReverbFilter>();
+        if (rf == null) rf = gameObject.AddComponent<AudioReverbFilter>();
+        return rf;
+    }
+
+    private void EnsureReverbPresetUser()
+    {
+        if (reverbFilter != null && reverbFilter.reverbPreset != AudioReverbPreset.User)
+            reverbFilter.reverbPreset = AudioReverbPreset.User;
+    }
+
     private void ConfigureAudioSource()
     {
         audioSource.clip                  = clip;
@@ -248,32 +273,38 @@ public class SpatialSoundObject : MonoBehaviour
     private void ConfigureCollider()
     {
         var col = GetComponent<SphereCollider>();
-        // ═══ QUAN TRỌNG: isTrigger = FALSE ═══
-        // Nếu true → Physics.Raycast mặc định bỏ qua → TopDownView và
-        // SpeakerGrabber không thể click/select speaker.
         col.isTrigger = false;
         col.radius    = 0.6f;
     }
 
     private void ApplyAllDSP()
     {
+        // LP / HP filters
         if (lpFilter != null) lpFilter.cutoffFrequency = eqLowPassCutoff;
         if (hpFilter != null)
         {
-            hpFilter.enabled = true;
+            hpFilter.enabled         = true;
             hpFilter.cutoffFrequency = eqHighPassCutoff;
         }
+
+        // BUG FIX: dùng AudioReverbPreset.User thay vì Off
+        // Preset.Off lock tất cả parameters — Unity sẽ ignore mọi set sau đó.
+        // Chỉ Preset.User mới cho phép thay đổi room, decayTime, v.v. tự do.
         if (reverbFilter != null)
         {
-            reverbFilter.reverbPreset = AudioReverbPreset.Off;
-            reverbFilter.room         = reverbRoom;
+            reverbFilter.reverbPreset = AudioReverbPreset.User;
+            reverbFilter.room         = reverbRoom;        // -10000..0  (fully dry = 0)
             reverbFilter.decayTime    = reverbDecayTime;
+            reverbFilter.dryLevel     = 0f;               // 0 dB dry path luôn rõ
+            reverbFilter.reverbLevel  = -10000f;          // bắt đầu fully dry
         }
-        bqDirty = true;
+
+        // Mid EQ — tính coefficients ban đầu
+        RecalcBiquad();
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    //  PRIVATE — Occlusion (RaycastAll + filter Player)
+    //  PRIVATE — Occlusion
     // ══════════════════════════════════════════════════════════════════════
 
     private void UpdateOcclusion()
@@ -285,23 +316,15 @@ public class SpatialSoundObject : MonoBehaviour
             float   dist = dir.magnitude;
             if (dist > 0.01f)
             {
-                // RaycastAll để filter — bỏ qua Player hierarchy và chính speaker
                 var hits = Physics.RaycastAll(
                     transform.position, dir.normalized, dist,
                     occlusionMask, QueryTriggerInteraction.Ignore);
 
                 foreach (var hit in hits)
                 {
-                    // Bỏ qua Player (CharacterController, Camera, etc.)
-                    if (listenerRoot != null && hit.transform.IsChildOf(listenerRoot))
-                        continue;
-                    // Bỏ qua chính speaker này
-                    if (hit.transform == transform)
-                        continue;
-                    // Bỏ qua các speaker khác (SphereCollider)
-                    if (hit.collider.GetComponent<SpatialSoundObject>() != null)
-                        continue;
-
+                    if (listenerRoot != null && hit.transform.IsChildOf(listenerRoot)) continue;
+                    if (hit.transform == transform) continue;
+                    if (hit.collider.GetComponent<SpatialSoundObject>() != null) continue;
                     target = 1f;
                     break;
                 }
@@ -312,21 +335,20 @@ public class SpatialSoundObject : MonoBehaviour
 
         if (lpFilter != null)
         {
-            // Kết hợp EQ low-pass + occlusion — lấy giá trị nhỏ hơn
             float occCutoff = Mathf.Lerp(openCutoff, blockedCutoff, currentOcclusion);
             lpFilter.cutoffFrequency = Mathf.Min(eqLowPassCutoff, occCutoff);
         }
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    //  PRIVATE — Mid EQ Biquad (chạy trên Audio Thread)
+    //  PRIVATE — Mid EQ Biquad
     // ══════════════════════════════════════════════════════════════════════
 
+    // Gọi từ main thread: tính hệ số mới vào _pending*, set flag cho audio thread
     private void RecalcBiquad()
     {
-        bqDirty = false;
         float gainAbs = Mathf.Pow(10f, eqMidGain / 40f);
-        float w0 = 2f * Mathf.PI * eqMidFreq / sampleRate;
+        float w0  = 2f * Mathf.PI * eqMidFreq / sampleRate;
         float sinW = Mathf.Sin(w0);
         float cosW = Mathf.Cos(w0);
         float alpha = sinW / (2f * eqMidQ);
@@ -336,22 +358,25 @@ public class SpatialSoundObject : MonoBehaviour
         {
             float norm = 1f + alpha / gainAbs;
             a0_inv = 1f / norm;
-            bq_a0 = (1f + alpha * gainAbs) * a0_inv;
-            bq_a1 = (-2f * cosW)           * a0_inv;
-            bq_a2 = (1f - alpha * gainAbs) * a0_inv;
-            bq_b1 = bq_a1;
-            bq_b2 = (1f - alpha / gainAbs) * a0_inv;
+            _pa0 = (1f + alpha * gainAbs) * a0_inv;
+            _pa1 = (-2f * cosW)           * a0_inv;
+            _pa2 = (1f - alpha * gainAbs) * a0_inv;
+            _pb1 = _pa1;
+            _pb2 = (1f - alpha / gainAbs) * a0_inv;
         }
         else
         {
             float norm = 1f + alpha * gainAbs;
             a0_inv = 1f / norm;
-            bq_a0 = (1f + alpha / gainAbs) * a0_inv;
-            bq_a1 = (-2f * cosW)            * a0_inv;
-            bq_a2 = (1f - alpha / gainAbs)  * a0_inv;
-            bq_b1 = bq_a1;
-            bq_b2 = (1f - alpha * gainAbs)  * a0_inv;
+            _pa0 = (1f + alpha / gainAbs) * a0_inv;
+            _pa1 = (-2f * cosW)            * a0_inv;
+            _pa2 = (1f - alpha / gainAbs)  * a0_inv;
+            _pb1 = _pa1;
+            _pb2 = (1f - alpha * gainAbs)  * a0_inv;
         }
+
+        // Signal audio thread: new coefficients ready
+        _bqPending = true;
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -361,6 +386,15 @@ public class SpatialSoundObject : MonoBehaviour
     private void OnAudioFilterRead(float[] data, int channels)
     {
         if (channels < 1) return;
+
+        // Swap pending coefficients — đầu mỗi buffer để tránh mid-buffer glitch
+        if (_bqPending)
+        {
+            _la0 = _pa0; _la1 = _pa1; _la2 = _pa2;
+            _lb1 = _pb1; _lb2 = _pb2;
+            _bqPending = false;
+        }
+
         bool doEQ   = Mathf.Abs(eqMidGain) > 0.1f;
         bool doComp = compThreshold > -59.9f;
         if (!doEQ && !doComp) return;
@@ -372,23 +406,21 @@ public class SpatialSoundObject : MonoBehaviour
 
         for (int i = 0; i < data.Length; i += channels)
         {
-            // ── Mid EQ (biquad per channel) ──
+            // ── Mid EQ (biquad) ──
             if (doEQ)
             {
-                // Left
                 float xL = data[i];
-                float yL = bq_a0 * xL + bq_a1 * bq_x1L + bq_a2 * bq_x2L
-                                       - bq_b1 * bq_y1L - bq_b2 * bq_y2L;
+                float yL = _la0 * xL + _la1 * bq_x1L + _la2 * bq_x2L
+                                     - _lb1 * bq_y1L  - _lb2 * bq_y2L;
                 bq_x2L = bq_x1L; bq_x1L = xL;
                 bq_y2L = bq_y1L; bq_y1L = yL;
                 data[i] = yL;
 
-                // Right
                 if (channels >= 2)
                 {
                     float xR = data[i + 1];
-                    float yR = bq_a0 * xR + bq_a1 * bq_x1R + bq_a2 * bq_x2R
-                                           - bq_b1 * bq_y1R - bq_b2 * bq_y2R;
+                    float yR = _la0 * xR + _la1 * bq_x1R + _la2 * bq_x2R
+                                         - _lb1 * bq_y1R  - _lb2 * bq_y2R;
                     bq_x2R = bq_x1R; bq_x1R = xR;
                     bq_y2R = bq_y1R; bq_y1R = yR;
                     data[i + 1] = yR;
@@ -401,11 +433,9 @@ public class SpatialSoundObject : MonoBehaviour
                 float peak = Mathf.Abs(data[i]);
                 if (channels >= 2) peak = Mathf.Max(peak, Mathf.Abs(data[i + 1]));
 
-                // Envelope follower
                 float coeff = peak > compEnvelope ? attackCoeff : releaseCoeff;
                 compEnvelope = coeff * compEnvelope + (1f - coeff) * peak;
 
-                // Gain reduction
                 float gain = 1f;
                 if (compEnvelope > threshLin && compEnvelope > 0.0001f)
                     gain = threshLin / compEnvelope;
@@ -430,7 +460,10 @@ public class SpatialSoundObject : MonoBehaviour
         src.minDistance  = minDistance;
         src.maxDistance  = maxDistance;
         src.volume       = volume;
-        bqDirty = true;
+        // Validate reverb preset nếu component tồn tại
+        var rf = GetComponent<AudioReverbFilter>();
+        if (rf != null && rf.reverbPreset != AudioReverbPreset.User)
+            rf.reverbPreset = AudioReverbPreset.User;
     }
 
     private void OnDrawGizmosSelected()
