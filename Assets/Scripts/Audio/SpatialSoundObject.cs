@@ -4,8 +4,8 @@ using UnityEngine.Audio;
 /// <summary>
 /// Một "loa" 3D trong AudioWorld.
 ///
-/// Per-object DSP: Low Pass, High Pass, Mid EQ (biquad), Reverb, Compressor
-/// Global (mixer): Master Volume
+/// Per-object DSP: Low Pass, High Pass, Mid EQ (biquad), Compressor
+/// Global (mixer): Master Volume, Reverb
 /// Occlusion: RaycastAll → filter Player hierarchy
 ///
 /// Collider: SphereCollider (isTrigger = FALSE) để raycast từ
@@ -43,11 +43,6 @@ public class SpatialSoundObject : MonoBehaviour
     [SerializeField, Range(500f, 6000f)]   private float eqMidFreq        = 1500f;
     [SerializeField, Range(0.2f, 5f)]      private float eqMidQ           = 1f;
 
-    [Header("Per-Object Reverb")]
-    // BUG FIX: default -1000 → 0f agar slider 0% = fully dry
-    [SerializeField, Range(-10000f, 0f)] private float reverbRoom      = 0f;
-    [SerializeField, Range(0.1f, 20f)]   private float reverbDecayTime = 1.5f;
-
     [Header("Per-Object Compressor")]
     [SerializeField, Range(-60f, 0f)]  private float compThreshold  = -20f;
     [SerializeField, Range(0f, 20f)]   private float compMakeupGain = 0f;
@@ -73,8 +68,6 @@ public class SpatialSoundObject : MonoBehaviour
     public float EQLowPassCutoff  => eqLowPassCutoff;
     public float EQHighPassCutoff => eqHighPassCutoff;
     public float EQMidGain        => eqMidGain;
-    public float ReverbRoom       => reverbRoom;
-    public float ReverbDecayTime  => reverbDecayTime;
     public float CompThreshold    => compThreshold;
     public float CompMakeupGain   => compMakeupGain;
 
@@ -85,7 +78,6 @@ public class SpatialSoundObject : MonoBehaviour
     private AudioSource         audioSource;
     private AudioLowPassFilter  lpFilter;
     private AudioHighPassFilter hpFilter;
-    private AudioReverbFilter   reverbFilter;
     private Transform           listener;
     private Transform           listenerRoot;
     private float               currentOcclusion;
@@ -115,7 +107,6 @@ public class SpatialSoundObject : MonoBehaviour
         audioSource  = GetComponent<AudioSource>();
         lpFilter     = GetComponent<AudioLowPassFilter>();
         hpFilter     = GetComponent<AudioHighPassFilter>();
-        reverbFilter = GetOrAddReverbFilter();
 
         ConfigureAudioSource();
         ConfigureCollider();
@@ -186,8 +177,19 @@ public class SpatialSoundObject : MonoBehaviour
     public void SetEQLowPass(float cutoff)
     {
         eqLowPassCutoff = Mathf.Clamp(cutoff, 200f, 22000f);
-        if (!useOcclusion && lpFilter != null)
+        if (lpFilter == null) return;
+
+        if (useOcclusion)
+        {
+            // Occlusion đang bật: áp dụng ngay với currentOcclusion hiện tại
+            // (không cần chờ frame sau trong UpdateOcclusion)
+            float occCutoff = Mathf.Lerp(openCutoff, blockedCutoff, currentOcclusion);
+            lpFilter.cutoffFrequency = Mathf.Min(eqLowPassCutoff, occCutoff);
+        }
+        else
+        {
             lpFilter.cutoffFrequency = eqLowPassCutoff;
+        }
     }
 
     public void SetEQHighPass(float cutoff)
@@ -202,29 +204,6 @@ public class SpatialSoundObject : MonoBehaviour
         eqMidGain = Mathf.Clamp(dB, -12f, 12f);
         // Tính coefficients trên main thread, audio thread sẽ swap vào
         RecalcBiquad();
-    }
-
-    // ── Per-Object Reverb ─────────────────────────────────────────────────
-
-    public void SetReverbRoom(float room)
-    {
-        reverbRoom = Mathf.Clamp(room, -10000f, 0f);
-        if (reverbFilter != null)
-        {
-            // Preset phải là User — chỉ khi đó Unity mới cho phép set room
-            EnsureReverbPresetUser();
-            reverbFilter.room = reverbRoom;
-        }
-    }
-
-    public void SetReverbDecay(float decay)
-    {
-        reverbDecayTime = Mathf.Clamp(decay, 0.1f, 20f);
-        if (reverbFilter != null)
-        {
-            EnsureReverbPresetUser();
-            reverbFilter.decayTime = reverbDecayTime;
-        }
     }
 
     // ── Per-Object Compressor ─────────────────────────────────────────────
@@ -242,19 +221,6 @@ public class SpatialSoundObject : MonoBehaviour
     // ══════════════════════════════════════════════════════════════════════
     //  PRIVATE — Setup
     // ══════════════════════════════════════════════════════════════════════
-
-    private AudioReverbFilter GetOrAddReverbFilter()
-    {
-        var rf = GetComponent<AudioReverbFilter>();
-        if (rf == null) rf = gameObject.AddComponent<AudioReverbFilter>();
-        return rf;
-    }
-
-    private void EnsureReverbPresetUser()
-    {
-        if (reverbFilter != null && reverbFilter.reverbPreset != AudioReverbPreset.User)
-            reverbFilter.reverbPreset = AudioReverbPreset.User;
-    }
 
     private void ConfigureAudioSource()
     {
@@ -285,18 +251,6 @@ public class SpatialSoundObject : MonoBehaviour
         {
             hpFilter.enabled         = true;
             hpFilter.cutoffFrequency = eqHighPassCutoff;
-        }
-
-        // BUG FIX: dùng AudioReverbPreset.User thay vì Off
-        // Preset.Off lock tất cả parameters — Unity sẽ ignore mọi set sau đó.
-        // Chỉ Preset.User mới cho phép thay đổi room, decayTime, v.v. tự do.
-        if (reverbFilter != null)
-        {
-            reverbFilter.reverbPreset = AudioReverbPreset.User;
-            reverbFilter.room         = reverbRoom;        // -10000..0  (fully dry = 0)
-            reverbFilter.decayTime    = reverbDecayTime;
-            reverbFilter.dryLevel     = 0f;               // 0 dB dry path luôn rõ
-            reverbFilter.reverbLevel  = -10000f;          // bắt đầu fully dry
         }
 
         // Mid EQ — tính coefficients ban đầu
@@ -460,10 +414,19 @@ public class SpatialSoundObject : MonoBehaviour
         src.minDistance  = minDistance;
         src.maxDistance  = maxDistance;
         src.volume       = volume;
-        // Validate reverb preset nếu component tồn tại
-        var rf = GetComponent<AudioReverbFilter>();
-        if (rf != null && rf.reverbPreset != AudioReverbPreset.User)
-            rf.reverbPreset = AudioReverbPreset.User;
+
+        // ── EQ filters ──
+        var lp = GetComponent<AudioLowPassFilter>();
+        if (lp != null) lp.cutoffFrequency = eqLowPassCutoff;
+
+        var hp = GetComponent<AudioHighPassFilter>();
+        if (hp != null) hp.cutoffFrequency = eqHighPassCutoff;
+
+        // Mid EQ biquad — recalc coefficients (guard: sampleRate chưa có trước Awake)
+        if (sampleRate > 0f) RecalcBiquad();
+
+        // Compressor: compThreshold / compMakeupGain được đọc trực tiếp
+        // trong OnAudioFilterRead mỗi buffer — không cần propagate thêm.
     }
 
     private void OnDrawGizmosSelected()

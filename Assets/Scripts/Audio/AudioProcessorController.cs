@@ -2,26 +2,35 @@ using UnityEngine;
 using UnityEngine.Audio;
 
 /// <summary>
-/// Điều khiển tất cả DSP parameters trên AudioMixer.
+/// Điều khiển global AudioMixer parameters (master bus).
+///
+/// VAI TRÒ TRONG KIẾN TRÚC:
+///   - Per-object DSP (EQ, Compressor, Volume) → SpatialSoundObject (filters trực tiếp)
+///   - Global bus (MasterVolume, Reverb, future global EQ) → class này
+///
+/// HIỆN TẠI: Reverb và MasterVolume xử lý global qua AudioMixer.
+/// Per-object DSP (LP, HP, Mid EQ, Compressor) xử lý qua SpatialSoundObject.
 ///
 /// HIERARCHY:
 ///   Systems → AudioManager → AudioProcessorController (component này)
 ///
-/// ── AudioMixer Setup (Music group, theo thứ tự từ trên xuống) ──
+/// ── AudioMixer Setup ──
 ///
-///   Effect              │ Expose parameter     │ Tên expose
-///   ────────────────────┼──────────────────────┼─────────────────
-///   Highpass            │ Cutoff freq          │ HighPassCutoff
-///   Lowpass             │ Cutoff freq          │ LowPassCutoff
-///   ParamEQ (Mid)       │ Gain                 │ MidEQGain
-///   SFX Reverb          │ Room (wet)           │ ReverbWet
-///                       │ Decay Time           │ ReverbDecayTime
-///   Compressor          │ Threshold            │ CompThreshold
-///                       │ Ratio                │ CompRatio
-///   Attenuation (Master)│ Volume               │ MasterVolume
+///   Group / Effect         │ Expose parameter     │ Tên expose
+///   ───────────────────────┼──────────────────────┼─────────────────
+///   Master → Attenuation   │ Volume               │ MasterVolume
+///   Piano  → Highpass      │ Cutoff freq          │ HighPassCutoff
+///   Piano  → Lowpass       │ Cutoff freq          │ LowPassCutoff
+///   Piano  → ParamEQ       │ Frequency gain       │ MidEQGain
+///   Piano  → Compressor    │ Threshold            │ CompThreshold
+///                          │ Make up gain         │ CompMakeupGain
+///   Piano  → Send          │ (→ Piano_Reverb)     │ (không expose)
+///   Piano_Reverb → Attenu. │ Volume               │ ReverbWet
+///   Piano_Reverb → Reverb  │ Decay Time           │ ReverbDecayTime
 ///
-/// ParamEQ (Mid): đặt Center Freq ~1000 Hz, Bandwidth ~1.0 trong Inspector.
-/// Chỉ expose Gain — đây là dải mid boost/cut duy nhất.
+/// LƯU Ý: Piano mixer effects (LP, HP, ParamEQ, Comp) giữ neutral.
+/// DSP thực tế xử lý per-object qua SpatialSoundObject.
+/// Mixer effects chỉ dùng làm global override layer (tương lai).
 /// </summary>
 [DisallowMultipleComponent]
 public class AudioProcessorController : MonoBehaviour
@@ -89,10 +98,11 @@ public class AudioProcessorController : MonoBehaviour
         Set(pMidEQGain, _midEQGain);
     }
 
-    /// <param name="linear">0–1</param>
+    /// <param name="linear">0–1 → Piano_Reverb bus volume (-80 dB … 0 dB)</param>
     public void SetReverbWet(float linear)
     {
         _reverbWet = Mathf.Clamp01(linear);
+        // Piano_Reverb bus Attenuation: linear 0 → -80 dB (silent), 1 → 0 dB (full)
         Set(pReverbWet, ToDecibel(_reverbWet));
     }
 

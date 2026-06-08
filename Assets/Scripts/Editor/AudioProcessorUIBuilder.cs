@@ -15,24 +15,32 @@ public class AudioProcessorUIBuilder : EditorWindow
         public float  min, max, defaultVal;
     }
 
-    private static readonly SliderConfig[] Sliders =
+    // ── Per-object: áp riêng từng speaker ────────────────────────────────
+    private static readonly SliderConfig[] PerObjectSliders =
     {
         new SliderConfig { section="EQ",         fieldSlider="sliderLowPass",       fieldLabel="labelLowPass",       displayName="Low Pass",       defaultText="22.0 kHz", min=200f,  max=22000f, defaultVal=22000f },
         new SliderConfig { section=null,         fieldSlider="sliderHighPass",      fieldLabel="labelHighPass",      displayName="High Pass",      defaultText="20 Hz",    min=20f,   max=2000f,  defaultVal=20f    },
         new SliderConfig { section=null,         fieldSlider="sliderMidEQ",         fieldLabel="labelMidEQ",         displayName="Mid EQ (~1kHz)", defaultText="0.0 dB",   min=-12f,  max=12f,    defaultVal=0f     },
-        new SliderConfig { section="Reverb",     fieldSlider="sliderReverbWet",     fieldLabel="labelReverbWet",     displayName="Wet Level",      defaultText="0%",       min=0f,    max=1f,     defaultVal=0f     },
-        new SliderConfig { section=null,         fieldSlider="sliderReverbDecay",   fieldLabel="labelReverbDecay",   displayName="Decay Time",     defaultText="1.00 s",   min=0.1f,  max=10f,    defaultVal=1f     },
         new SliderConfig { section="Compressor", fieldSlider="sliderCompThreshold", fieldLabel="labelCompThreshold", displayName="Threshold",      defaultText="0.0 dB",   min=-60f,  max=0f,     defaultVal=0f     },
         new SliderConfig { section=null,         fieldSlider="sliderCompMakeupGain",fieldLabel="labelCompMakeupGain",displayName="Make Up Gain",   defaultText="0.0 dB",   min=0f,    max=20f,    defaultVal=0f     },
+    };
+
+    // ── Global: áp chung qua AudioMixer ──────────────────────────────────
+    private static readonly SliderConfig[] GlobalSliders =
+    {
+        new SliderConfig { section="Reverb",     fieldSlider="sliderReverbWet",     fieldLabel="labelReverbWet",     displayName="Wet Level",      defaultText="0%",       min=0f,    max=1f,     defaultVal=0f     },
+        new SliderConfig { section=null,         fieldSlider="sliderReverbDecay",   fieldLabel="labelReverbDecay",   displayName="Decay Time",     defaultText="1.00 s",   min=0.1f,  max=10f,    defaultVal=1f     },
         new SliderConfig { section="Master",     fieldSlider="sliderMasterVolume",  fieldLabel="labelMasterVolume",  displayName="Master Volume",  defaultText="100%",     min=0f,    max=1f,     defaultVal=1f     },
     };
 
     // ── Colors ──────────────────────────────────────────────────────────
-    private Color panelBg     = new Color(0.08f, 0.08f, 0.11f, 0.97f);
-    private Color sectionBg   = new Color(0.15f, 0.40f, 0.80f, 1f);
-    private Color rowBg       = new Color(0.13f, 0.13f, 0.17f, 1f);
-    private Color transportBg = new Color(0.10f, 0.25f, 0.10f, 1f);
-    private Color uploadBg    = new Color(0.22f, 0.14f, 0.08f, 1f);
+    private Color panelBg        = new Color(0.08f, 0.08f, 0.11f, 0.97f);
+    private Color sectionBg      = new Color(0.15f, 0.40f, 0.80f, 1f);
+    private Color globalSectionBg= new Color(0.55f, 0.30f, 0.70f, 1f);
+    private Color rowBg          = new Color(0.13f, 0.13f, 0.17f, 1f);
+    private Color transportBg    = new Color(0.10f, 0.25f, 0.10f, 1f);
+    private Color uploadBg       = new Color(0.22f, 0.14f, 0.08f, 1f);
+    private Color groupDividerBg = new Color(0.20f, 0.22f, 0.28f, 1f);
 
     private float panelWidth  = 500f;
     private float rowH        = 52f;
@@ -191,11 +199,21 @@ public class AudioProcessorUIBuilder : EditorWindow
         // ── Transport section ────────────────────────────────────────────
         totalH += MakeTransportSection(content.transform, so);
 
-        // ── Slider rows ──────────────────────────────────────────────────
-        foreach (var cfg in Sliders)
+        // ── Per-Object DSP group ─────────────────────────────────────────
+        totalH += MakeGroupDivider(content.transform, "PER-OBJECT DSP", "Áp riêng từng speaker");
+        foreach (var cfg in PerObjectSliders)
         {
             if (cfg.section != null)
-                totalH += MakeSectionHeader(content.transform, cfg.section);
+                totalH += MakeSectionHeader(content.transform, cfg.section, sectionBg);
+            totalH += MakeSliderRow(content.transform, so, cfg);
+        }
+
+        // ── Global (Mixer) group ─────────────────────────────────────────
+        totalH += MakeGroupDivider(content.transform, "GLOBAL — MIXER", "Áp chung tất cả speakers");
+        foreach (var cfg in GlobalSliders)
+        {
+            if (cfg.section != null)
+                totalH += MakeSectionHeader(content.transform, cfg.section, globalSectionBg);
             totalH += MakeSliderRow(content.transform, so, cfg);
         }
 
@@ -437,12 +455,52 @@ public class AudioProcessorUIBuilder : EditorWindow
         return h + 5f;
     }
 
+    // ── Group divider (Per-Object / Global) ─────────────────────────────
+    private float MakeGroupDivider(Transform parent, string title, string subtitle)
+    {
+        float h = 36f;
+        var go  = MakeGO("Group_" + title, parent);
+        SetH(go, h);
+        go.AddComponent<Image>().color = groupDividerBg;
+
+        var hlg = go.AddComponent<HorizontalLayoutGroup>();
+        hlg.padding            = new RectOffset(10, 10, 0, 0);
+        hlg.spacing            = 8f;
+        hlg.childControlHeight = true;
+        hlg.childControlWidth  = true;
+        hlg.childForceExpandWidth = false;
+
+        // Title
+        var titleGO = MakeGO("Title", go.transform);
+        SetH(titleGO, h);
+        titleGO.AddComponent<LayoutElement>().preferredWidth = 160f;
+        var titleTMP = titleGO.AddComponent<TextMeshProUGUI>();
+        titleTMP.text      = title;
+        titleTMP.fontSize  = 12f;
+        titleTMP.fontStyle = FontStyles.Bold;
+        titleTMP.color     = new Color(0.9f, 0.85f, 0.6f);
+        titleTMP.alignment = TextAlignmentOptions.Left | TextAlignmentOptions.Midline;
+
+        // Subtitle
+        var subGO = MakeGO("Subtitle", go.transform);
+        SetH(subGO, h);
+        subGO.AddComponent<LayoutElement>().flexibleWidth = 1f;
+        var subTMP = subGO.AddComponent<TextMeshProUGUI>();
+        subTMP.text      = subtitle;
+        subTMP.fontSize  = 11f;
+        subTMP.fontStyle = FontStyles.Italic;
+        subTMP.color     = new Color(0.55f, 0.55f, 0.62f);
+        subTMP.alignment = TextAlignmentOptions.Right | TextAlignmentOptions.Midline;
+
+        return h + 5f;
+    }
+
     // ── Section header ───────────────────────────────────────────────────
-    private float MakeSectionHeader(Transform parent, string text)
+    private float MakeSectionHeader(Transform parent, string text, Color color)
     {
         var go  = MakeGO("Section_" + text, parent);
         SetH(go, sectionH);
-        go.AddComponent<Image>().color = sectionBg;
+        go.AddComponent<Image>().color = color;
 
         var lGO  = MakeGO("Label", go.transform);
         StretchRT(lGO, 10f, 0f);

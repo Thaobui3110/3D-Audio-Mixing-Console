@@ -7,10 +7,9 @@ using TMPro;
 /// UI chính của Audio Processor Sandbox.
 /// Quản lý: upload file, play/stop, source dropdown, tất cả sliders DSP.
 ///
-/// EQ section (Lựa chọn 2):
-///   - Low Pass Cutoff  (Lowpass effect  → LowPassCutoff)
-///   - High Pass Cutoff (Highpass effect → HighPassCutoff)
-///   - Mid EQ Gain      (ParamEQ effect  → MidEQGain, ~1kHz)
+/// ROUTING:
+///   Per-object (qua SpatialSoundObject): LP, HP, Mid EQ, Compressor
+///   Global (qua AudioProcessorController → AudioMixer): Reverb Wet/Decay, Master Volume
 /// </summary>
 [DisallowMultipleComponent]
 public class AudioProcessorUI : MonoBehaviour
@@ -71,6 +70,30 @@ public class AudioProcessorUI : MonoBehaviour
     // ── Private ────────────────────────────────────────────────────────────
     private string selectedSourceID;
 
+    /// <summary>
+    /// Lưu giá trị slider hiện tại.
+    /// Per-object params (LP, HP, MidEQ, Comp): dùng khi spawn speaker mới ở mode "All Sources".
+    /// Global params (reverbWet, reverbDecay, masterVolume): luôn đồng bộ với AudioMixer.
+    /// </summary>
+    private struct SliderState
+    {
+        public float lowPass, highPass, midEQ;
+        public float reverbWet, reverbDecay;
+        public float compThreshold, compMakeupGain;
+        public float masterVolume;
+    }
+    private SliderState _globalState = new()
+    {
+        lowPass       = 22000f,
+        highPass      = 20f,
+        midEQ         = 0f,
+        reverbWet     = 0f,       // 0..1 (không phải room value)
+        reverbDecay   = 1f,
+        compThreshold = -60f,
+        compMakeupGain= 0f,
+        masterVolume  = 1f,
+    };
+
     // ── Lifecycle ──────────────────────────────────────────────────────────
     private void Awake()
     {
@@ -90,18 +113,9 @@ public class AudioProcessorUI : MonoBehaviour
         HookFileLoader();
         HookAudioManager();
 
-        // Reset TOÀN BỘ global mixer về neutral — DSP giờ hoàn toàn per-object
-        if (processor != null)
-        {
-            processor.SetLowPassCutoff(22000f);
-            processor.SetHighPassCutoff(20f);
-            processor.SetMidEQGain(0f);
-            processor.SetReverbWet(0f);
-            processor.SetReverbDecay(1f);
-            processor.SetCompressorThreshold(0f);
-            processor.SetCompressorMakeupGain(0f);
-            processor.SetMasterVolume(1f);
-        }
+        // Global params (Reverb, MasterVolume) → AudioProcessorController.Start()
+        // đã ApplyAllDefaults(). Giá trị khớp với _globalState defaults.
+        // Per-object DSP (LP, HP, MidEQ, Comp) → áp qua SpatialSoundObject.
 
         if (loadingBar != null) loadingBar.gameObject.SetActive(false);
         SetStatus("Ready — Upload audio hoặc chọn speaker.");
@@ -117,21 +131,15 @@ public class AudioProcessorUI : MonoBehaviour
     // ── Init ───────────────────────────────────────────────────────────────
     private void InitSliders()
     {
-        // EQ: LowPass + HighPass + MidEQ
-        ConfigSlider(sliderLowPass,       200f,  22000f, processor?.GetLowPassCutoff()        ?? 22000f);
-        ConfigSlider(sliderHighPass,       20f,   2000f, processor?.GetHighPassCutoff()        ?? 20f);
-        ConfigSlider(sliderMidEQ,         -12f,    12f,  processor?.GetMidEQGain()             ?? 0f);
-
-        // Reverb
-        ConfigSlider(sliderReverbWet,      0f,     1f,   processor?.GetReverbWet()             ?? 0f);
-        ConfigSlider(sliderReverbDecay,    0.1f,  10f,   processor?.GetReverbDecay()           ?? 1f);
-
-        // Compressor
-        ConfigSlider(sliderCompThreshold, -60f,    0f,   processor?.GetCompressorThreshold()   ?? 0f);
-        ConfigSlider(sliderCompMakeupGain, 0f,    20f,   processor?.GetCompressorMakeupGain()  ?? 0f);
-
-        // Master
-        ConfigSlider(sliderMasterVolume,   0f,     1f,   processor?.GetMasterVolume()          ?? 1f);
+        // Fix #2: khởi tạo từ _globalState (không phụ thuộc processor)
+        ConfigSlider(sliderLowPass,        200f,  22000f, _globalState.lowPass);
+        ConfigSlider(sliderHighPass,        20f,   2000f, _globalState.highPass);
+        ConfigSlider(sliderMidEQ,          -12f,    12f,  _globalState.midEQ);
+        ConfigSlider(sliderReverbWet,        0f,     1f,  _globalState.reverbWet);
+        ConfigSlider(sliderReverbDecay,    0.1f,   10f,   _globalState.reverbDecay);
+        ConfigSlider(sliderCompThreshold,  -60f,    0f,   _globalState.compThreshold);
+        ConfigSlider(sliderCompMakeupGain,   0f,   20f,   _globalState.compMakeupGain);
+        ConfigSlider(sliderMasterVolume,     0f,    1f,   _globalState.masterVolume);
 
         // Labels
         UpdateAllLabels();
@@ -217,9 +225,27 @@ public class AudioProcessorUI : MonoBehaviour
         RefreshDropdown();
         if (speaker != null)
         {
+            // Fix #2: apply _globalState lên speaker mới — tránh speaker mới bị "reset về default"
+            // khi user đã kéo slider ở mode "All Sources" trước đó.
+            ApplyGlobalStateToSpeaker(speaker);
+
             var p = speaker.transform.position;
             SetStatus($"✓ Spawned {speaker.SourceID} tại ({p.x:F1}, {p.y:F1}, {p.z:F1}) — nhìn phía trước.");
         }
+    }
+
+    /// <summary>
+    /// Apply _globalState (giá trị slider hiện tại khi "All Sources") vào một speaker cụ thể.
+    /// Chỉ apply per-object params (EQ, Compressor). Reverb/Master là global → không apply.
+    /// </summary>
+    private void ApplyGlobalStateToSpeaker(SpatialSoundObject s)
+    {
+        if (s == null) return;
+        s.SetEQLowPass(_globalState.lowPass);
+        s.SetEQHighPass(_globalState.highPass);
+        s.SetEQMidGain(_globalState.midEQ);
+        s.SetCompThreshold(_globalState.compThreshold);
+        s.SetCompMakeupGain(_globalState.compMakeupGain);
     }
 
     private void OnDropdownChanged(int index)
@@ -230,30 +256,38 @@ public class AudioProcessorUI : MonoBehaviour
         var src = GetSelectedSource();
         if (src != null)
         {
-            // Load tất cả per-object values vào sliders
+            // Load per-object values vào sliders (chỉ per-object params)
             SetSliderNoNotify(sliderLowPass,          src.EQLowPassCutoff);
             SetSliderNoNotify(sliderHighPass,         src.EQHighPassCutoff);
             SetSliderNoNotify(sliderMidEQ,            src.EQMidGain);
-            SetSliderNoNotify(sliderReverbWet,        Mathf.InverseLerp(-10000f, 0f, src.ReverbRoom));
-            SetSliderNoNotify(sliderReverbDecay,      src.ReverbDecayTime);
             SetSliderNoNotify(sliderCompThreshold,    src.CompThreshold);
             SetSliderNoNotify(sliderCompMakeupGain,   src.CompMakeupGain);
-            SetSliderNoNotify(sliderMasterVolume,     src.Volume);
 
             SetLabel(labelLowPass,        FormatHz(src.EQLowPassCutoff));
             SetLabel(labelHighPass,       FormatHz(src.EQHighPassCutoff));
             SetLabel(labelMidEQ,          FormatDB(src.EQMidGain));
-            SetLabel(labelReverbWet,      FormatPercent(Mathf.InverseLerp(-10000f, 0f, src.ReverbRoom)));
-            SetLabel(labelReverbDecay,    FormatSeconds(src.ReverbDecayTime));
             SetLabel(labelCompThreshold,  FormatDB(src.CompThreshold));
             SetLabel(labelCompMakeupGain, FormatDB(src.CompMakeupGain));
-            SetLabel(labelMasterVolume,   FormatPercent(src.Volume));
 
-            SetStatus($"Selected: {selectedSourceID} — toàn bộ EQ riêng cho source này");
+            // Reverb Wet/Decay, Master Volume → global, không đổi khi switch speaker
+            SetStatus($"Selected: {selectedSourceID} — per-object EQ/Comp riêng, Reverb/Master chung");
         }
         else
         {
-            SetStatus("All Sources — chỉnh sẽ áp dụng cho tất cả speakers");
+            // "All Sources" — restore _globalState cho per-object sliders
+            SetSliderNoNotify(sliderLowPass,        _globalState.lowPass);
+            SetSliderNoNotify(sliderHighPass,       _globalState.highPass);
+            SetSliderNoNotify(sliderMidEQ,          _globalState.midEQ);
+            SetSliderNoNotify(sliderCompThreshold,  _globalState.compThreshold);
+            SetSliderNoNotify(sliderCompMakeupGain, _globalState.compMakeupGain);
+
+            SetLabel(labelLowPass,        FormatHz(_globalState.lowPass));
+            SetLabel(labelHighPass,       FormatHz(_globalState.highPass));
+            SetLabel(labelMidEQ,          FormatDB(_globalState.midEQ));
+            SetLabel(labelCompThreshold,  FormatDB(_globalState.compThreshold));
+            SetLabel(labelCompMakeupGain, FormatDB(_globalState.compMakeupGain));
+
+            SetStatus("All Sources — EQ/Comp áp tất cả speakers, Reverb/Master chung");
         }
     }
 
@@ -271,56 +305,64 @@ public class AudioProcessorUI : MonoBehaviour
         s.SetValueWithoutNotify(v);
     }
 
-    // ── Slider callbacks — ALL per-object ──────────────────────────────────
-    // Chọn speaker cụ thể → chỉnh riêng. "All Sources" → áp cho tất cả.
+    // ── Slider callbacks ──────────────────────────────────────────────────
+    // Per-object (LP, HP, MidEQ, Comp): chọn speaker → riêng speaker đó;
+    //   "All Sources" → áp tất cả + lưu _globalState.
+    // Global (Reverb, Master): luôn áp lên AudioMixer qua processor.
 
     public void OnLowPassChanged(float v)
     {
+        if (string.IsNullOrEmpty(selectedSourceID)) _globalState.lowPass = v;
         PerObject(s => s.SetEQLowPass(v));
         SetLabel(labelLowPass, FormatHz(v));
     }
 
     public void OnHighPassChanged(float v)
     {
+        if (string.IsNullOrEmpty(selectedSourceID)) _globalState.highPass = v;
         PerObject(s => s.SetEQHighPass(v));
         SetLabel(labelHighPass, FormatHz(v));
     }
 
     public void OnMidEQChanged(float v)
     {
+        if (string.IsNullOrEmpty(selectedSourceID)) _globalState.midEQ = v;
         PerObject(s => s.SetEQMidGain(v));
         SetLabel(labelMidEQ, FormatDB(v));
     }
 
     public void OnReverbWetChanged(float v)
     {
-        // Map 0..1 → -10000..0 cho AudioReverbFilter.room
-        float room = Mathf.Lerp(-10000f, 0f, v);
-        PerObject(s => s.SetReverbRoom(room));
+        _globalState.reverbWet = v;
+        processor.SetReverbWet(v);
         SetLabel(labelReverbWet, FormatPercent(v));
     }
 
     public void OnReverbDecayChanged(float v)
     {
-        PerObject(s => s.SetReverbDecay(v));
+        _globalState.reverbDecay = v;
+        processor.SetReverbDecay(v);
         SetLabel(labelReverbDecay, FormatSeconds(v));
     }
 
     public void OnCompThresholdChanged(float v)
     {
+        if (string.IsNullOrEmpty(selectedSourceID)) _globalState.compThreshold = v;
         PerObject(s => s.SetCompThreshold(v));
         SetLabel(labelCompThreshold, FormatDB(v));
     }
 
     public void OnCompMakeupGainChanged(float v)
     {
+        if (string.IsNullOrEmpty(selectedSourceID)) _globalState.compMakeupGain = v;
         PerObject(s => s.SetCompMakeupGain(v));
         SetLabel(labelCompMakeupGain, FormatDB(v));
     }
 
     public void OnMasterVolumeChanged(float v)
     {
-        PerObject(s => s.SetVolume(v));
+        _globalState.masterVolume = v;
+        processor.SetMasterVolume(v);
         SetLabel(labelMasterVolume, FormatPercent(v));
     }
 
@@ -382,15 +424,24 @@ public class AudioProcessorUI : MonoBehaviour
     private void HookAudioManager()
     {
         if (audioManager == null) return;
-        audioManager.OnSourceSpawned += _ => RefreshDropdown();
+        // Fix #2: speaker spawn từ bất kỳ đâu (kể cả ngoài button) đều nhận _globalState
+        audioManager.OnSourceSpawned += OnExternalSpawn;
         audioManager.OnSourceRemoved += _ => RefreshDropdown();
     }
 
     private void UnhookAudioManager()
     {
         if (audioManager == null) return;
-        audioManager.OnSourceSpawned -= _ => RefreshDropdown();
+        audioManager.OnSourceSpawned -= OnExternalSpawn;
         audioManager.OnSourceRemoved -= _ => RefreshDropdown();
+    }
+
+    private void OnExternalSpawn(SpatialSoundObject speaker)
+    {
+        RefreshDropdown();
+        // Chỉ apply nếu chưa có speaker cụ thể nào đang được chọn (đang ở "All Sources")
+        if (string.IsNullOrEmpty(selectedSourceID))
+            ApplyGlobalStateToSpeaker(speaker);
     }
 
     // ── Dropdown ───────────────────────────────────────────────────────────
@@ -407,15 +458,15 @@ public class AudioProcessorUI : MonoBehaviour
     // ── Helpers ────────────────────────────────────────────────────────────
     private void UpdateAllLabels()
     {
-        if (processor == null) return;
-        SetLabel(labelLowPass,       FormatHz(processor.GetLowPassCutoff()));
-        SetLabel(labelHighPass,      FormatHz(processor.GetHighPassCutoff()));
-        SetLabel(labelMidEQ,         FormatDB(processor.GetMidEQGain()));
-        SetLabel(labelReverbWet,     FormatPercent(processor.GetReverbWet()));
-        SetLabel(labelReverbDecay,   FormatSeconds(processor.GetReverbDecay()));
-        SetLabel(labelCompThreshold, FormatDB(processor.GetCompressorThreshold()));
-        SetLabel(labelCompMakeupGain,FormatDB(processor.GetCompressorMakeupGain()));
-        SetLabel(labelMasterVolume,  FormatPercent(processor.GetMasterVolume()));
+        // Fix #1: labels đọc từ _globalState, không phụ thuộc vào AudioProcessorController
+        SetLabel(labelLowPass,        FormatHz(_globalState.lowPass));
+        SetLabel(labelHighPass,       FormatHz(_globalState.highPass));
+        SetLabel(labelMidEQ,          FormatDB(_globalState.midEQ));
+        SetLabel(labelReverbWet,      FormatPercent(_globalState.reverbWet));
+        SetLabel(labelReverbDecay,    FormatSeconds(_globalState.reverbDecay));
+        SetLabel(labelCompThreshold,  FormatDB(_globalState.compThreshold));
+        SetLabel(labelCompMakeupGain, FormatDB(_globalState.compMakeupGain));
+        SetLabel(labelMasterVolume,   FormatPercent(_globalState.masterVolume));
     }
 
     private static void ConfigSlider(Slider s, float min, float max, float val)
